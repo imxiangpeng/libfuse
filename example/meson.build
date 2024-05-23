@@ -1,7 +1,7 @@
 examples = [ 'passthrough', 'passthrough_fh',
              'hello', 'hello_ll', 'hello_ll_uds',
              'printcap', 'ioctl_client', 'poll_client',
-             'ioctl', 'cuse', 'cuse_client', 'tcloud_drive']
+             'ioctl', 'cuse', 'cuse_client' ]
 
 if not platform.endswith('bsd') and platform != 'dragonfly'
     examples += 'passthrough_ll'
@@ -38,3 +38,9 @@ if not platform.endswith('bsd') and platform != 'dragonfly' and add_languages('c
 endif
 
 # TODO: Link passthrough_fh with ulockmgr if available
+
+cjson_library = cc.find_library('cjson', required : true)
+executable('tcloud_drive', ['tcloud/tcloud_drive.c', 'tcloud/j2sobject_cloud.c', 'tcloud/j2s/j2sobject.c'],
+    dependencies: [ thread_dep, libfuse_dep, cjson_library ],
+    include_directories: 'tcloud/j2s',
+        install: false)

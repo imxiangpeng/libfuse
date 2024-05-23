@@ -1,0 +1,177 @@
+{
+    "res_code":0,
+    "res_message":"成功",
+    "fileListAO":{
+        "count":12,
+        "fileList":[
+            {
+                "createDate":"2024-05-14 10:46:17",
+                "fileCata":1,
+                "id":424761133551464142,
+                "lastOpTime":"2024-05-14 10:46:17",
+                "md5":"67FF3275490C825497D0E7AE52A74431",
+                "mediaType":4,
+                "name":"欢迎使用天翼云盘.pdf",
+                "rev":"20240514104617",
+                "size":11496566,
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-14 10:46:16",
+                "fileCata":1,
+                "icon":{
+                    "largeUrl":"https://preview.cloud.189.cn/image/imageAction?param=F2F78DB066CB9B6B3EAEE93C94E922441AC2F86E2DFBDE3DDB7D3F692DD263E17E05F6DE364B2B833FB044106C4C614582808145DA8F96C523F16BE7197ED5DBF5F186C377F725F7CB40B56B9973640E02A2069FCDE8AA535ADE0A12286DDF8564A2641A0B725AB2F29CBCB641B425818148B63A",
+                    "smallUrl":"https://preview.cloud.189.cn/image/imageAction?param=55BF66AD6D5837617410A8618B42AD4F68CC9F55156D3D149B8334059BD8A914210D2CB2AA46B2EB5EE9752CF01F4F92DF9DF78AB656E22FA05CE6E1FB6410E6C1BE093963B9D4841D72153297C4498370A9F93B480E58DF0AA3154D5987FC6678911713EDDE97E93BD2DC97B9273A75A2BFD101"
+                },
+                "id":924761133551464016,
+                "lastOpTime":"2024-05-14 10:46:16",
+                "md5":"43BB0DD030FE6BEB70E92FDCE9B1E560",
+                "mediaType":3,
+                "name":"05_如何制作动感影集.mp4",
+                "rev":"20240514104616",
+                "size":48986505,
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-14 10:46:16",
+                "fileCata":1,
+                "icon":{
+                    "largeUrl":"https://preview.cloud.189.cn/image/imageAction?param=2383D1E18917263C58BC55F382AABEEF714BB32F75010A4CACD96597BA33BFAC98E34529198734F33C49F6CACFFA6EF32C331A92E316F12B474CFC0A9983685609B737E2993C63D3B9156CF61FEC4774A6C7EF1D6998C4D67BA47CB517604FA5CF1C9677F7E81032518E702D2F9BCF23023F2C77",
+                    "smallUrl":"https://preview.cloud.189.cn/image/imageAction?param=CC68C62F866E7A4023AB789AA69BF1583932F0C7D32712D8779AAD4D5A17B2C6BB020EDF8E112B0B3BE38B072A01F8ACA80A4A63DED008891983B24795287BAF6ADB426B820BA8B25CF0F469915C2AA1349D0EF1382C04282C56FAAA2675174FB4DD2C749F8A59408FE35C1575E625F228CF122F"
+                },
+                "id":224761133551464022,
+                "lastOpTime":"2024-05-14 10:46:16",
+                "md5":"54EDE765274C0CAFDB5B8056CF798EEF",
+                "mediaType":3,
+                "name":"04_如何创建家庭纪念相册.mp4",
+                "rev":"20240514104616",
+                "size":40209690,
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-14 10:46:16",
+                "fileCata":1,
+                "icon":{
+                    "largeUrl":"https://preview.cloud.189.cn/image/imageAction?param=980C5FE4A236FF2CB82A7575D8A1E871DE1F666580565DDBC1AC1801ABDA6B1524BD05F911E7925DB5CB76B4CC6AC7D0EC2CF64EC0AE743E457B5D938BF2150D8E402B1B7EF31AD35A1C76B585A2848559A6C00AB4C4FDC1F40B74584BA9E3A81453F168B1B1988DB8C6C84A27EE1FC91F29F2EF",
+                    "smallUrl":"https://preview.cloud.189.cn/image/imageAction?param=AB8F2D1B9454BB3B6A9E1D317DEF1E544AA85C3552DE1D7F2DAC0A2ACF29BC226C3330FC4697B1DE7EBD93D6C99390940C529C2F2CBFA85F0CA22980448FFAAB99B2C60467BA4BE24FC4EB26340209C1E68A7FA6425ECCC1104EA8535227E9F03C8D3466D861DDA8E232E0F14BBAF4944EACD26E"
+                },
+                "id":124761133551464028,
+                "lastOpTime":"2024-05-14 10:46:16",
+                "md5":"A0930E3314A34BD668FB17671F1AB80B",
+                "mediaType":3,
+                "name":"03_如何在TV端浏览照片.mp4",
+                "rev":"20240514104616",
+                "size":19899152,
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-14 10:46:16",
+                "fileCata":1,
+                "icon":{
+                    "largeUrl":"https://preview.cloud.189.cn/image/imageAction?param=05537D88A66D006ACC2ABCFA1E9F6E6E8056BD7E8E995E8A6374A2917BD4ACF36A5EFA9CE60F302636827AF27130E520A1D705D1CFD45980FB51B0B706143B6C9DD069179A5843DF6DE1B08998B72325B1DC3ABA202D261BAF2D576286DFDAF2A32DA5BBD7F61EBA0219385D62E9DB4EB772C32D",
+                    "smallUrl":"https://preview.cloud.189.cn/image/imageAction?param=6D5FE695B7B121FE4AA0D42B6BA978CFBA3106CB2655ADA2EDFA0440F3D244027081E2B5CE4EB140CD960C8A5113C6F37B8AD13AE094DA44B921A4FC3F328F6139E91A14D5CF5231CA1D9DD8FE8965DB753D37D826D3ECC747F5E53B10A1C4433BE54522812FE45D39D7A37BA02672CF2714D0AF"
+                },
+                "id":124761133551464034,
+                "lastOpTime":"2024-05-14 10:46:16",
+                "md5":"58B6D07F6BD21020EF7F92DE027DE41D",
+                "mediaType":3,
+                "name":"02_如何开启自动备份.mp4",
+                "rev":"20240514104616",
+                "size":11234079,
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-14 10:46:16",
+                "fileCata":1,
+                "icon":{
+                    "largeUrl":"https://preview.cloud.189.cn/image/imageAction?param=8615B62EEFB2DEF89344CF1493789F9907346FB50E015EBAE29F06E905DCE55E7B54E4ADF17B304C165A55E5360D35D182687BDD3ED1DBCACD169DF76CD2D141895B475622B6C9B6A9EE54D953A5389B549719ABFBFEE13A69D853E481A8A12F85B7C13A81B42F9CBB2D820551E0F90FC15DBDC3",
+                    "smallUrl":"https://preview.cloud.189.cn/image/imageAction?param=55B8069C80A1FC8D94BBEC1F7E19D41DDB7A0C98015C53482A9B31C2169B2873D2FC924CDB63000E918A94559638ADA46755688D5E308B038D3E8BEF44AA882A454E54D21E85D6E3310F58C87D451C5259670A61CC4DC6DB39858417E0670F0251BA6AA26F4001B03C62242F93C4916B25FC65ED"
+                },
+                "id":324761133551464040,
+                "lastOpTime":"2024-05-14 10:46:16",
+                "md5":"9B19D93D767837EF19F20699C906CF88",
+                "mediaType":3,
+                "name":"01_如何上传照片到天翼云盘.mp4",
+                "rev":"20240514104616",
+                "size":31238915,
+                "starLabel":2
+            }
+        ],
+        "fileListSize":6,
+        "folderList":[
+            {
+                "createDate":"2024-05-15 00:05:12",
+                "fileCata":0,
+                "fileCount":2,
+                "fileListSize":0,
+                "id":0,
+                "lastOpTime":"2024-05-15 00:05:12",
+                "name":"同步盘",
+                "parentId":-11,
+                "rev":"20240515000512",
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-15 00:05:12",
+                "fileCata":1,
+                "fileCount":2,
+                "fileListSize":0,
+                "id":-12,
+                "lastOpTime":"2024-05-15 00:05:12",
+                "name":"我的图片",
+                "parentId":-11,
+                "rev":"20240515000512",
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-15 00:05:12",
+                "fileCata":1,
+                "fileCount":1,
+                "fileListSize":0,
+                "id":-14,
+                "lastOpTime":"2024-05-15 00:05:12",
+                "name":"我的音乐",
+                "parentId":-11,
+                "rev":"20240515000512",
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-15 00:05:12",
+                "fileCata":1,
+                "fileCount":0,
+                "fileListSize":0,
+                "id":-13,
+                "lastOpTime":"2024-05-15 00:05:12",
+                "name":"我的视频",
+                "parentId":-11,
+                "rev":"20240515000512",
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-15 00:05:12",
+                "fileCata":1,
+                "fileCount":1,
+                "fileListSize":0,
+                "id":-15,
+                "lastOpTime":"2024-05-15 00:05:12",
+                "name":"我的文档",
+                "parentId":-11,
+                "rev":"20240515000512",
+                "starLabel":2
+            },
+            {
+                "createDate":"2024-05-15 00:05:12",
+                "fileCata":1,
+                "fileCount":2,
+                "fileListSize":0,
+                "id":-16,
+                "lastOpTime":"2024-05-15 00:05:12",
+                "name":"我的应用",
+                "parentId":-11,
+                "rev":"20240515000512",
+                "starLabel":2
+            }
+        ]
+    },
+    "lastRev":20240521155652
+}
