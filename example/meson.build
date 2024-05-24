@@ -40,7 +40,7 @@ endif
 # TODO: Link passthrough_fh with ulockmgr if available
 
 cjson_library = cc.find_library('cjson', required : true)
-executable('tcloud_drive', ['tcloud/tcloud_drive.c', 'tcloud/j2sobject_cloud.c', 'tcloud/j2s/j2sobject.c'],
+executable('tcloudfs', ['tcloud/tcloudfs.c', 'tcloud/tcloud_drive.c', 'tcloud/tcloud_buffer.c', 'tcloud/j2sobject_cloud.c', 'tcloud/j2s/j2sobject.c'],
     dependencies: [ thread_dep, libfuse_dep, cjson_library ],
     include_directories: 'tcloud/j2s',
         install: false)
