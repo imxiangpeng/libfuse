@@ -2,22 +2,24 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #include <stdint.h>
+#include <sys/stat.h>
 #endif
 
 #define FUSE_USE_VERSION FUSE_VERSION
 
 #include <errno.h>
-#include <string.h>
-#include <unistd.h>
+#include <fuse_kernel.h>
+#include <fuse_lowlevel.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
-#include <pthread.h>
-#include <fuse_lowlevel.h>
-#include <fuse_kernel.h>
+#include <unistd.h>
 
+#include "hr_list.h"
 #include "tcloud_buffer.h"
 #include "tcloud_drive.h"
 
@@ -27,51 +29,84 @@
 
 struct tcloudfs_node {
     ino_t ino;  // --> id
-    uint32_t cloud_id;
+    int32_t cloud_id;
     uint64_t refcount;
-
+    char *name;
     off_t offset;
     size_t size;
     mode_t mode;
+    time_t expire_time;
     struct tcloud_buffer *data;
-    struct j2sobject *dir;
-    struct tcloudfs_node *next, *prev;
+    // struct j2sobject *dir;
+    // directory child lists
+    struct tcloudfs_node *parent;
+    struct hr_list_head entry;
+    struct hr_list_head head;  // folder head
 };
 struct tcloudfs_priv {
     pthread_mutex_t mutex;
 
     // uint32_t default_root_id;
-    struct tcloudfs_node root;
+    /// struct tcloudfs_node root;
+    struct hr_list_head head;
+    // should be deleted nodes
+    struct hr_list_head delete_pending_queue;
 };
+
+static struct tcloudfs_node *allocate_node(int cloud_id, const char *name,
+                                           struct tcloudfs_node *parent) {
+    struct tcloudfs_node *node = NULL;
+
+    if (!name)
+        return NULL;
+
+    node = (struct tcloudfs_node *)calloc(1, sizeof(struct tcloudfs_node));
+    if (!node)
+        return NULL;
+
+    node->cloud_id = cloud_id;
+    node->name = strdup(name);
+    node->parent = parent;
+    HR_INIT_LIST_HEAD(&node->entry);
+    HR_INIT_LIST_HEAD(&node->head);
+
+    if (parent) {
+        node->parent = parent;
+        hr_list_add_tail(&node->entry, &parent->head);
+    }
+
+    return node;
+}
 
 static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     struct tcloudfs_priv *priv = (struct lo_data *)userdata;
     printf("%s(%d): .........priv:%p\n", __FUNCTION__, __LINE__, priv);
 }
 
-static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    printf("%s(%d): .........priv:%p, parent ino:%" PRIu64 ", name:%s\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), parent, name);
+static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
+                            const char *name) {
+    printf("%s(%d): .........priv:%p, parent ino:%" PRIu64 ", name:%s\n",
+           __FUNCTION__, __LINE__, fuse_req_userdata(req), parent, name);
 
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
 
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
-    struct tcloudfs_node *node = NULL;
+    struct tcloudfs_node *node = NULL, *p = NULL;
     if (parent == 1) {
-        node = &priv->root;
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
-        struct tcloudfs_node *next = priv->root.next;
-        while (next != &priv->root) {
-            if (next->ino == parent) {
-                node = next;
-                break;
-            }
-            next = next->next;
-        }
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)parent;
     }
 
-    if (!node || !node->dir) {
-        printf("no ........node:%p, node dir:%p........\n", node, node->dir);
+    if (!node || !S_ISDIR(node->mode)) {
+        printf("no ........node:%p, node dir:%d........\n", node, S_ISDIR(node->mode));
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
@@ -79,55 +114,14 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     e.attr_timeout = 1.0;
     e.entry_timeout = 1.0;
 
-    struct j2scloud_folder_resp *object = (struct j2scloud_folder_resp *)node->dir;
-    j2scloud_folder_t *t = NULL;
-
-    for (t = (j2scloud_folder_t *)J2SOBJECT(object->folderList)->next;
-         t != (j2scloud_folder_t *)J2SOBJECT(object->folderList);
-         t = (j2scloud_folder_t *)J2SOBJECT(t)->next) {
-        if (0 == strcmp(name, t->name)) {
+    hr_list_for_each_entry(p, &node->head, entry) {
+        printf("%s(%d): child: id:%d, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p->cloud_id, p->name, S_ISDIR(p->mode));
+        if (0 == strcmp(name, p->name)) {
             printf("got :%s\n", name);
-            e.attr.st_mode = S_IFDIR | 755;
-            e.attr.st_ino = t->id;
-            e.ino = (fuse_ino_t)t->id;
-
-            struct tcloudfs_node *n = (struct tcloudfs_node *)calloc(1, sizeof(struct tcloudfs_node));
-            n->ino = t->id;
-            n->cloud_id = t->id;
-            n->mode = S_IFDIR;
-            // e.ino = (fuse_ino_t)n;
-
-            n->next = &priv->root;
-            n->prev = priv->root.prev;
-            priv->root.prev->next = n;
-            priv->root.prev = n;
-            fuse_reply_entry(req, &e);
-            return;
-        }
-
-        // timespec_from_date_string(&st.st_atim, t->lastOpTime);
-        // timespec_from_date_string(&st.st_mtim, t->lastOpTime);
-    }
-
-    j2scloud_file_t *f = NULL;
-    for (f = (j2scloud_file_t *)J2SOBJECT(object->fileList)->next;
-         f != (j2scloud_file_t *)J2SOBJECT(object->fileList);
-         f = (j2scloud_file_t *)J2SOBJECT(f)->next) {
-        if (0 == strcmp(name, f->name)) {
-            printf("got :%s\n", name);
-            e.attr.st_mode = S_IFREG | 755;
-            e.attr.st_ino = f->id;
-            e.ino = (fuse_ino_t)f->id;
-
-            struct tcloudfs_node *n = (struct tcloudfs_node *)calloc(1, sizeof(struct tcloudfs_node));
-            n->ino = f->id;
-            n->cloud_id = f->id;
-            n->mode = S_IFREG;
-
-            n->next = &priv->root;
-            n->prev = priv->root.prev;
-            priv->root.prev->next = n;
-            priv->root.prev = n;
+            e.attr.st_mode = p->mode | 755;
+            e.attr.st_ino = (fuse_ino_t)p;
+            e.attr.st_nlink = S_ISDIR(p->mode) ? 1 : 2;
+            e.ino = (fuse_ino_t)p;
             fuse_reply_entry(req, &e);
             return;
         }
@@ -142,9 +136,28 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     fuse_reply_err(req, ENOSYS);
 }
 
+static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 ", nlookup:%" PRIu64 "\n", __FUNCTION__,
+           __LINE__, fuse_req_userdata(req), ino, nlookup);
+    if (ino == FUSE_ROOT_ID)
+        return;
+
+    // do_forget(req_fuse(req), ino, nlookup);
+    struct tcloudfs_node *node = NULL, *p = NULL;
+    node = (struct tcloudfs_node *)ino;
+
+    printf("id: %d, name:%s\n", node->cloud_id, node->name);
+    printf("%s(%d): pending delete queue ......\n", __FUNCTION__, __LINE__);
+    hr_list_for_each_entry(p, &priv->delete_pending_queue, entry) {
+        printf("%p -> %d -> %s\n", p, p->cloud_id, p->name);
+    }
+    fuse_reply_none(req);
+}
 static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
                              struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 ", fi:%p\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino, fi);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 ", fi:%p\n", __FUNCTION__,
+           __LINE__, fuse_req_userdata(req), ino, fi);
     struct stat st;
 
     (void)fi;
@@ -152,37 +165,68 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
     memset(&st, 0, sizeof(st));
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
-        node = &priv->root;
+    if (ino == FUSE_ROOT_ID) {
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
     }
 
-    st.st_mode = S_IFDIR | 0755;
+    printf("%s(%d): name:%s mode:%o\n", __FUNCTION__, __LINE__, node->name, node->mode);
+    st.st_mode = node->mode | 0755;
+    st.st_nlink = 1;
     fuse_reply_attr(req, &st, 1.0);
 }
 
 static void tcloudfs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
                              int valid, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
 }
 
-static void tcloudfs_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+static void tcloudfs_access(fuse_req_t req, fuse_ino_t ino, int mask) {
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node = NULL;
+    if (ino == FUSE_ROOT_ID) {
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
+    }
+
+    fuse_reply_err(req, 0);
+}
+static void tcloudfs_opendir(fuse_req_t req, fuse_ino_t ino,
+                             struct fuse_file_info *fi) {
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
     printf("%s(%d): .....\n", __FUNCTION__, __LINE__);
     if (ino == 1) {
-        node = &priv->root;
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
-    printf("%s(%d): .....\n", __FUNCTION__, __LINE__);
-        struct tcloudfs_node *next = priv->root.next;
-        while (next != &priv->root) {
-            if (next->ino == ino) {
-                node = next;
-                break;
-            }
-            next = next->next;
-        }
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
     }
+
     printf("%s(%d): .....\n", __FUNCTION__, __LINE__);
 
     if (!node || !S_ISDIR(node->mode)) {
@@ -203,96 +247,165 @@ static void tcloudfs_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
 
 static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
                              off_t offset, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 ", size:%ld, offset:%ld, fi:%p\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino, size, offset, fi);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64
+           ", size:%ld, offset:%ld, fi:%p\n",
+           __FUNCTION__, __LINE__, fuse_req_userdata(req), ino, size, offset, fi);
+
+    time_t now = 0;
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
     if (ino == 1) {
-        node = &priv->root;
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
-        struct tcloudfs_node *next = priv->root.next;
-        while (next != &priv->root) {
-            if (next->ino == ino) {
-                node = next;
-                break;
-            }
-        }
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
     }
 
     printf("node :%p  vs fi->fh:%p\n", node, (void *)fi->fh);
     if (!node || !S_ISDIR(node->mode)) {
+        printf("%s(%d):  not support name:%s\n", __FUNCTION__, __LINE__, node->name);
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
 
     if (!node->data) {
-        struct j2scloud_folder_resp *dir = NULL;
-        node->data = (struct tcloud_buffer *)calloc(1, sizeof(struct tcloud_buffer));
+        node->data =
+            (struct tcloud_buffer *)calloc(1, sizeof(struct tcloud_buffer));
         tcloud_buffer_alloc(node->data, size);
+        node->offset = 0;
 
-        struct stat st;
-        st.st_mode = S_IFDIR;
+        // cache timing ?
+        now = time(NULL);
 
-        size_t entlen = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
-        entlen = fuse_add_direntry(req, node->data->data + node->data->offset, (node->data->size - node->data->offset), ".",
-                                   &st, node->data->offset + entlen);
-        node->data->offset += entlen;
-        entlen = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
-        entlen = fuse_add_direntry(req, node->data->data + node->data->offset, (node->data->size - node->data->offset), "..",
-                                   &st, node->data->offset + entlen);
-        node->data->offset += entlen;
+        printf("%s(%d): .........priv:%p, ino:%" PRIu64
+               ", size:%ld, offset:%ld, fi:%p, time :%ld, expire:%ld\n",
+               __FUNCTION__, __LINE__, fuse_req_userdata(req), ino, size, offset, fi, now, node->expire_time);
 
-        int ret = 0;
-        if (!node->dir) {
-            printf("%s(%d): dir using %d\n", __FUNCTION__, __LINE__, node->cloud_id);
-            int ret = tcloud_drive_opendir(/*ino == 1 ? -11 : ino*/ node->cloud_id, &dir);
-
-            node->dir = J2SOBJECT(dir);
-            ret = tcloud_drive_readdir(/*ino == 1 ? -11 : ino*/ node->cloud_id, dir);
-        }
-
-        dir = node->dir;
-        if (ret == 0) {
+        if (node->expire_time < now) {
+            node->expire_time = now + 5;  // expire after 5s
+            // 1. free all cached object
+            struct j2scloud_folder_resp *dir = NULL;
+            struct stat st;
             st.st_mode = S_IFDIR;
 
-            struct j2scloud_folder_resp *object = dir;
-            j2scloud_folder_t *t = NULL;
+            size_t entlen = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
+            entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                       (node->data->size - node->data->offset), ".",
+                                       &st, node->data->offset + entlen);
+            node->data->offset += entlen;
+            entlen = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
+            entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                       (node->data->size - node->data->offset), "..",
+                                       &st, node->data->offset + entlen);
+            node->data->offset += entlen;
 
-            for (t = (j2scloud_folder_t *)J2SOBJECT(object->folderList)->next;
-                 t != (j2scloud_folder_t *)J2SOBJECT(object->folderList);
-                 t = (j2scloud_folder_t *)J2SOBJECT(t)->next) {
-                st.st_mode = S_IFDIR;
-                st.st_ino = t->id;
+            struct tcloudfs_node *p = NULL, *n = NULL;
 
-                // timespec_from_date_string(&st.st_atim, t->lastOpTime);
-                // timespec_from_date_string(&st.st_mtim, t->lastOpTime);
-
-                entlen = fuse_add_direntry(req, NULL, 0, t->name, NULL, 0);
-                entlen = fuse_add_direntry(req, node->data->data + node->data->offset, (node->data->size - node->data->offset), t->name,
-                                           &st, node->data->offset + entlen);
-                node->data->offset += entlen;
+            hr_list_for_each_entry_safe(p, n, &node->head, entry) {
+                printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+                hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
             }
 
-            j2scloud_file_t *f = NULL;
-            for (f = (j2scloud_file_t *)J2SOBJECT(object->fileList)->next;
-                 f != (j2scloud_file_t *)J2SOBJECT(object->fileList);
-                 f = (j2scloud_file_t *)J2SOBJECT(f)->next) {
-                st.st_mode = S_IFREG;
-                st.st_size = (long)f->size;
-                st.st_ino = f->id;
-                // timespec_from_date_string(&stbuf->st_ctim, f->createDate);
-                // timespec_from_date_string(&stbuf->st_atim, f->lastOpTime);
-                // timespec_from_date_string(&stbuf->st_mtim, f->lastOpTime);
-                entlen = fuse_add_direntry(req, NULL, 0, f->name, NULL, 0);
-                entlen = fuse_add_direntry(req, node->data->data + node->data->offset, (node->data->size - node->data->offset), f->name,
-                                           &st, node->data->offset + entlen);
+            int ret = 0;
+            printf("%s(%d): dir using %d\n", __FUNCTION__, __LINE__, node->cloud_id);
+            ret =
+                tcloud_drive_opendir(/*ino == 1 ? -11 : ino*/ node->cloud_id, &dir);
+
+            ret = tcloud_drive_readdir(/*ino == 1 ? -11 : ino*/ node->cloud_id, dir);
+
+            printf("json ret:%d\n", ret);
+            if (ret == 0) {
+                printf("%s(%d): dir using %d\n", __FUNCTION__, __LINE__, node->cloud_id);
+                st.st_mode = S_IFDIR;
+
+                struct j2scloud_folder_resp *object = dir;
+                j2scloud_folder_t *t = NULL;
+                printf("%s(%d): dir using %d\n", __FUNCTION__, __LINE__, node->cloud_id);
+
+                for (t = (j2scloud_folder_t *)J2SOBJECT(object->folderList)->next;
+                     t != (j2scloud_folder_t *)J2SOBJECT(object->folderList);
+                     t = (j2scloud_folder_t *)J2SOBJECT(t)->next) {
+                    st.st_mode = S_IFDIR;
+
+                    printf("%s(%d): dir name: %s\n", __FUNCTION__, __LINE__, t->name);
+                    // timespec_from_date_string(&st.st_atim, t->lastOpTime);
+                    // timespec_from_date_string(&st.st_mtim, t->lastOpTime);
+
+                    entlen = fuse_add_direntry(req, NULL, 0, t->name, NULL, 0);
+                    entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                               (node->data->size - node->data->offset),
+                                               t->name, &st, node->data->offset + entlen);
+                    node->data->offset += entlen;
+
+                    struct tcloudfs_node *n = allocate_node(t->id, t->name, node);
+                    n->mode = S_IFDIR;
+                    // assign fuse_ino_t as n?
+                    st.st_ino = (fuse_ino_t)n;
+                }
+
+                j2scloud_file_t *f = NULL;
+                for (f = (j2scloud_file_t *)J2SOBJECT(object->fileList)->next;
+                     f != (j2scloud_file_t *)J2SOBJECT(object->fileList);
+                     f = (j2scloud_file_t *)J2SOBJECT(f)->next) {
+                    printf("%s(%d): file name: %s\n", __FUNCTION__, __LINE__, f->name);
+                    st.st_mode = S_IFREG;
+                    st.st_size = (long)f->size;
+                    // timespec_from_date_string(&stbuf->st_ctim, f->createDate);
+                    // timespec_from_date_string(&stbuf->st_atim, f->lastOpTime);
+                    // timespec_from_date_string(&stbuf->st_mtim, f->lastOpTime);
+                    entlen = fuse_add_direntry(req, NULL, 0, f->name, NULL, 0);
+                    entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                               (node->data->size - node->data->offset),
+                                               f->name, &st, node->data->offset + entlen);
+                    node->data->offset += entlen;
+
+                    struct tcloudfs_node *n = allocate_node(f->id, f->name, node);
+                    n->mode = S_IFREG;
+                    // assign fuse_ino_t as n?
+                    st.st_ino = (fuse_ino_t)n;
+                }
+            }
+
+            j2sobject_free(J2SOBJECT(dir));
+
+            node->offset = 0;
+
+        } else {
+            // using cache
+            struct tcloudfs_node *p = NULL;
+
+            printf("%s(%d).....using cache.....\n", __FUNCTION__, __LINE__);
+            struct stat st;
+            st.st_mode = S_IFDIR;
+            size_t entlen = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
+            entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                       (node->data->size - node->data->offset), ".",
+                                       &st, node->data->offset + entlen);
+            node->data->offset += entlen;
+            entlen = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
+            entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                       (node->data->size - node->data->offset), "..",
+                                       &st, node->data->offset + entlen);
+            node->data->offset += entlen;
+
+            hr_list_for_each_entry(p, &node->head, entry) {
+                printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+                entlen = fuse_add_direntry(req, NULL, 0, p->name, NULL, 0);
+                entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
+                                           (node->data->size - node->data->offset),
+                                           p->name, &st, node->data->offset + entlen);
                 node->data->offset += entlen;
             }
         }
-        node->offset = 0;
     }
-
     size_t total = node->data->offset;
-    printf("%s(%d): total:%ld, offset:%ld, size:%ld..........\n", __FUNCTION__, __LINE__, total, offset, size);
+    printf("%s(%d): total:%ld, offset:%ld, size:%ld..........\n", __FUNCTION__,
+           __LINE__, total, offset, size);
     if (offset >= total) {
         printf("%s(%d): end ..........\n", __FUNCTION__, __LINE__);
         fuse_reply_buf(req, NULL, 0);
@@ -302,17 +415,29 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     if (size > total - offset) {
         size = total - offset;
     }
-    printf("%s(%d): total:%ld, offset:%ld, size:%ld..........\n", __FUNCTION__, __LINE__, total, offset, size);
+    printf("%s(%d): total:%ld, offset:%ld, size:%ld..........\n", __FUNCTION__,
+           __LINE__, total, offset, size);
     fuse_reply_buf(req, node->data->data + offset, size);
     node->offset = offset + size;
-    printf("%s(%d): now offset:%ld, buffer %ld vs %ld..........\n", __FUNCTION__, __LINE__, node->offset, node->data->offset, node->data->size);
+    printf("%s(%d): now offset:%ld, buffer %ld vs %ld..........\n", __FUNCTION__,
+           __LINE__, node->offset, node->data->offset, node->data->size);
 }
-static void lo_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+static void lo_releasedir(fuse_req_t req, fuse_ino_t ino,
+                          struct fuse_file_info *fi) {
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
     if (ino == 1) {
-        node = &priv->root;
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
     }
 
     printf("node :%p  vs fi->fh:%p\n", node, (void *)fi->fh);
@@ -320,45 +445,50 @@ static void lo_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
-#if 0
-    if (node->dir) {
-        j2sobject_free(node->dir);
-        node->dir = NULL;
-    }
-#endif
     if (node->data) {
         tcloud_buffer_free(node->data);
+        free(node->data);
         node->data = NULL;
     }
 
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    node->offset = 0;
+    node->size = 0;
+
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     fuse_reply_err(req, 0);
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
 }
 
 static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
                       mode_t mode, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, parent:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), parent);
+    printf("%s(%d): .........priv:%p, parent:%" PRIu64 "\n", __FUNCTION__,
+           __LINE__, fuse_req_userdata(req), parent);
     fuse_reply_err(req, 0);
 }
 static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
 }
-static void lo_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+static void lo_release(fuse_req_t req, fuse_ino_t ino,
+                       struct fuse_file_info *fi) {
     (void)ino;
 
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     fuse_reply_err(req, 0);
 }
-static void lo_read(fuse_req_t req, fuse_ino_t ino, size_t size,
-                    off_t offset, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+static void lo_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t offset,
+                    struct fuse_file_info *fi) {
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
 }
 static void lo_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence,
                      struct fuse_file_info *fi) {
     off_t res = 0;
 
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     (void)ino;
     fuse_reply_lseek(req, res);
     // fuse_reply_err(req, errno);
@@ -366,23 +496,27 @@ static void lo_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence,
 
 static void lo_statfs(fuse_req_t req, fuse_ino_t ino) {
     struct statvfs stbuf;
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     fuse_reply_statfs(req, &stbuf);
 }
-static void lo_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
-                         off_t offset, off_t length, struct fuse_file_info *fi) {
+static void lo_fallocate(fuse_req_t req, fuse_ino_t ino, int mode, off_t offset,
+                         off_t length, struct fuse_file_info *fi) {
     int err = EOPNOTSUPP;
     (void)ino;
 
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__, fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     fuse_reply_err(req, err);
 }
 
 static const struct fuse_lowlevel_ops tcloudfs_ops = {
     .init = tcloudfs_init,
     .lookup = tcloudfs_lookup,
+    .forget = tcloudfs_forget,
     .getattr = tcloudfs_getattr,
     .setattr = tcloudfs_setattr,
+    .access = tcloudfs_access,
     .opendir = tcloudfs_opendir,
     .readdir = tcloudfs_readdir,
     .releasedir = lo_releasedir,
@@ -408,10 +542,13 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&priv.mutex, NULL);
 
     // init empty link
-    priv.root.next = priv.root.prev = &priv.root;
-    priv.root.mode = S_IFDIR;
-    priv.root.ino = 1;
-    priv.root.cloud_id = -11;
+    HR_INIT_LIST_HEAD(&priv.head);
+    HR_INIT_LIST_HEAD(&priv.delete_pending_queue);
+
+    struct tcloudfs_node *root = allocate_node(-11 /*FUSE_ROOT_ID*/, "/", NULL);
+    root->mode = S_IFDIR;
+
+    hr_list_add_tail(&root->entry, &priv.head);
 
     if (fuse_parse_cmdline(&args, &opts) != 0)
         return 1;

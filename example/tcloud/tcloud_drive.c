@@ -60,7 +60,7 @@ int tcloud_drive_readdir(int32_t id, struct j2scloud_folder_resp * dir) {
   char *path = NULL;
 
 
-  asprintf(&path, "/home/alex/workspace/workspace/libfuse/libfuse/build/filelists-%d.json", id);
+  asprintf(&path, "/workspace/workspace/libfuse/libfuse/build/filelists-%d.json", id);
   
   printf("folder :%d --> %s\n", id, path);
   
@@ -70,7 +70,7 @@ int tcloud_drive_readdir(int32_t id, struct j2scloud_folder_resp * dir) {
   free(path);
 
 
-  return 0;
+  return ret;
 }
 
 static int tcloud_drive_releasedir(const char *path,
@@ -138,4 +138,3 @@ static int tcloud_drive_create(const char *path, mode_t mode,
   printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
   return 0;
 }
-
