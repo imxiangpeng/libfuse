@@ -10,33 +10,6 @@
 
 #include "j2sobject_cloud.h"
 
-int timespec_from_date_string(struct timespec *ts, const char* date) {
-  struct tm tm_time;
-
-  if (!ts || !date) return -1;
-
-    memset(&tm_time, 0, sizeof(struct tm));
-
-    if (strptime(date, "%Y-%m-%d %H:%M:%S", &tm_time) == NULL) {
-        fprintf(stderr, "Failed to parse time string\n");
-        return 1;
-    }
-
-    time_t time_epoch = mktime(&tm_time);
-    if (time_epoch == -1) {
-        fprintf(stderr, "Failed to convert to time_t\n");
-        return 1;
-    }
-
-    ts->tv_sec = time_epoch;
-    ts->tv_nsec = 0;
-
-    // 打印结果
-    printf("Time: %ld seconds, %ld nanoseconds\n", ts->tv_sec, ts->tv_nsec); 
-  return 0;
-}
-
-
 static int tcloud_drive_getattr(const char *path, struct stat *stbuf,
                                 struct fuse_file_info *fi) {
   printf("%s(%d): path:%s fi:%p\n", __FUNCTION__, __LINE__, path, fi);

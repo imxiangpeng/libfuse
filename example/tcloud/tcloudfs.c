@@ -35,6 +35,9 @@ struct tcloudfs_node {
     off_t offset;
     size_t size;
     mode_t mode;
+    struct timespec atime;  //
+    struct timespec mtime;  //
+    struct timespec ctime;  //
     time_t expire_time;
     struct tcloud_buffer *data;
     // struct j2sobject *dir;
@@ -52,6 +55,32 @@ struct tcloudfs_priv {
     // should be deleted nodes
     struct hr_list_head delete_pending_queue;
 };
+
+int timespec_from_date_string(struct timespec *ts, const char *date) {
+    struct tm tm_time;
+
+    if (!ts || !date) return -1;
+
+    memset(&tm_time, 0, sizeof(struct tm));
+
+    if (strptime(date, "%Y-%m-%d %H:%M:%S", &tm_time) == NULL) {
+        fprintf(stderr, "Failed to parse time string\n");
+        return 1;
+    }
+
+    time_t time_epoch = mktime(&tm_time);
+    if (time_epoch == -1) {
+        fprintf(stderr, "Failed to convert to time_t\n");
+        return 1;
+    }
+
+    ts->tv_sec = time_epoch;
+    ts->tv_nsec = 0;
+
+    // 打印结果
+    printf("Time: %ld seconds, %ld nanoseconds\n", ts->tv_sec, ts->tv_nsec);
+    return 0;
+}
 
 static struct tcloudfs_node *allocate_node(int cloud_id, const char *name,
                                            struct tcloudfs_node *parent) {
@@ -180,6 +209,12 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
     printf("%s(%d): name:%s mode:%o\n", __FUNCTION__, __LINE__, node->name, node->mode);
     st.st_mode = node->mode | 0755;
     st.st_nlink = 1;
+    st.st_ctim = node->ctime;
+    st.st_mtim = node->mtime;
+    if (S_ISREG(node->mode)) {
+        st.st_size = node->size;
+        printf("%s -> %ld\n", node->name, st.st_size);
+    }
     fuse_reply_attr(req, &st, 1.0);
 }
 
@@ -307,7 +342,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
             struct tcloudfs_node *p = NULL, *n = NULL;
 
             hr_list_for_each_entry_safe(p, n, &node->head, entry) {
-                printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+                printf("remove expire nodes: %p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
                 hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
             }
 
@@ -344,6 +379,9 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
                     struct tcloudfs_node *n = allocate_node(t->id, t->name, node);
                     n->mode = S_IFDIR;
+                    timespec_from_date_string(&n->atime, t->createDate);
+                    timespec_from_date_string(&n->ctime, t->lastOpTime);
+                    timespec_from_date_string(&n->mtime, t->lastOpTime);
                     // assign fuse_ino_t as n?
                     st.st_ino = (fuse_ino_t)n;
                 }
@@ -366,6 +404,10 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
                     struct tcloudfs_node *n = allocate_node(f->id, f->name, node);
                     n->mode = S_IFREG;
+                    n->size = f->size;
+                    timespec_from_date_string(&n->atime, f->createDate);
+                    timespec_from_date_string(&n->ctime, f->lastOpTime);
+                    timespec_from_date_string(&n->mtime, f->lastOpTime);
                     // assign fuse_ino_t as n?
                     st.st_ino = (fuse_ino_t)n;
                 }
@@ -395,6 +437,8 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
             hr_list_for_each_entry(p, &node->head, entry) {
                 printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+                st.st_mode = p->mode /*S_IFDIR*/;
+                st.st_ino = (fuse_ino_t)p;
                 entlen = fuse_add_direntry(req, NULL, 0, p->name, NULL, 0);
                 entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
                                            (node->data->size - node->data->offset),
