@@ -150,11 +150,19 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
             e.attr.st_mode = p->mode | 755;
             e.attr.st_ino = (fuse_ino_t)p;
             e.attr.st_nlink = S_ISDIR(p->mode) ? 1 : 2;
+            e.attr.st_ctim = node->ctime;
+            e.attr.st_mtim = node->mtime;
+            if (S_ISREG(p->mode)) {
+                e.attr.st_size = p->size;
+                printf("%s -> %ld, mode:%o\n", p->name, e.attr.st_size, e.attr.st_mode);
+            }
+
             e.ino = (fuse_ino_t)p;
             fuse_reply_entry(req, &e);
             return;
         }
     }
+    printf("lookup can not got :%s\n", name);
 #if 0
     e.ino = 2;
     e.attr_timeout = 1.0;
@@ -162,7 +170,9 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.attr.st_mode = S_IFDIR | 0755;
     e.attr.st_nlink = 2;
 #endif
-    fuse_reply_err(req, ENOSYS);
+    e.ino = 0;
+    fuse_reply_entry(req, &e);
+    // fuse_reply_err(req, -ENOENT);
 }
 
 static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
@@ -176,11 +186,31 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     struct tcloudfs_node *node = NULL, *p = NULL;
     node = (struct tcloudfs_node *)ino;
 
-    printf("id: %d, name:%s\n", node->cloud_id, node->name);
+    printf("id: %d, name:%s, is dir:%d\n", node->cloud_id, node->name, S_ISDIR(node->mode));
+    if (S_ISDIR(node->mode)) {
+        pthread_mutex_lock(&priv->mutex);
+        // move all childs and this node to delete pending queue
+        if (!hr_list_empty(&node->head)) {
+            // new link last node -> origin link head (tail)
+            node->head.prev->next = &priv->delete_pending_queue;
+            // origin link prev(origin tail) -> new link first node
+            node->head.next->prev = priv->delete_pending_queue.prev;
+
+            priv->delete_pending_queue.prev->next = node->head.next;
+            priv->delete_pending_queue.prev = node->head.prev;
+
+            // keep this node later? only remove child node ?
+            // hr_list_del(&node->entry);
+            // hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
+        }
+        pthread_mutex_unlock(&priv->mutex);
+    }
+    // hr_list_move_tail(&node->entry, &priv->delete_pending_queue);
     printf("%s(%d): pending delete queue ......\n", __FUNCTION__, __LINE__);
     hr_list_for_each_entry(p, &priv->delete_pending_queue, entry) {
         printf("%p -> %d -> %s\n", p, p->cloud_id, p->name);
     }
+    printf("%s(%d): pending delete queue .end.....\n", __FUNCTION__, __LINE__);
     fuse_reply_none(req);
 }
 static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
@@ -207,6 +237,7 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
     }
 
     printf("%s(%d): name:%s mode:%o\n", __FUNCTION__, __LINE__, node->name, node->mode);
+    st.st_ino = (fuse_ino_t)node;
     st.st_mode = node->mode | 0755;
     st.st_nlink = 1;
     st.st_ctim = node->ctime;
@@ -214,7 +245,12 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
     if (S_ISREG(node->mode)) {
         st.st_size = node->size;
         printf("%s -> %ld\n", node->name, st.st_size);
+    } else {
+        st.st_size = 4096;
     }
+
+    st.st_gid = 1000;
+    st.st_uid = 1000;
     fuse_reply_attr(req, &st, 1.0);
 }
 
@@ -508,7 +544,35 @@ static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
                       mode_t mode, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, parent:%" PRIu64 "\n", __FUNCTION__,
            __LINE__, fuse_req_userdata(req), parent);
-    fuse_reply_err(req, 0);
+	struct fuse_entry_param e;
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node = NULL;
+    if (parent == 1) {
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)parent;
+    }
+
+    printf("node :%p  vs fi->fh:%p\n", node, (void *)fi->fh);
+    if (!node) {
+        fuse_reply_err(req, EOPNOTSUPP);
+        return;
+    }
+
+    struct tcloudfs_node *n = allocate_node(-11, name, node);
+    n->mode = S_IFREG;
+
+    e.ino = (fuse_ino_t)n;
+    e.attr.st_mode = S_IFREG;
+    e.attr.st_size = 0;
+		fuse_reply_create(req, &e, fi);
+    // fuse_reply_err(req, 0);
 }
 static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
@@ -539,10 +603,16 @@ static void lo_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence,
 }
 
 static void lo_statfs(fuse_req_t req, fuse_ino_t ino) {
-    struct statvfs stbuf;
+    struct statvfs result;
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
-    fuse_reply_statfs(req, &stbuf);
+
+    result.f_bsize = 4096;
+    result.f_blocks = 1024 * 1024;
+    result.f_bfree = 1024;
+    result.f_bavail = 1024;
+
+    fuse_reply_statfs(req, &result);
 }
 static void lo_fallocate(fuse_req_t req, fuse_ino_t ino, int mode, off_t offset,
                          off_t length, struct fuse_file_info *fi) {
