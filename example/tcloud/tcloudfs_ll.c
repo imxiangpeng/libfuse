@@ -152,10 +152,10 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
             e.attr.st_nlink = S_ISDIR(p->mode) ? 1 : 2;
             e.attr.st_ctim = node->ctime;
             e.attr.st_mtim = node->mtime;
-            if (S_ISREG(p->mode)) {
+            // if (S_ISREG(p->mode)) {
                 e.attr.st_size = p->size;
-                printf("%s -> %ld, mode:%o\n", p->name, e.attr.st_size, e.attr.st_mode);
-            }
+                printf("%s -> %ld, mode:%o, file size:%ld\n", p->name, e.attr.st_size, e.attr.st_mode, p->size);
+            // }
 
             e.ino = (fuse_ino_t)p;
             fuse_reply_entry(req, &e);
@@ -249,15 +249,26 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
         st.st_size = 4096;
     }
 
-    st.st_gid = getgid();
-    st.st_uid = getuid();
+    st.st_gid = 1000;
+    st.st_uid = 1000;
     fuse_reply_attr(req, &st, 1.0);
 }
 
 static void tcloudfs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
                              int valid, struct fuse_file_info *fi) {
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
-           fuse_req_userdata(req), ino);
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 ", valid:0x%X\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino, valid);
+    
+    if (valid & FUSE_SET_ATTR_MODE) {
+        printf("set attr mode ...mode:%o.\n", attr->st_mode);
+    }
+    if (valid & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)) {
+        printf("set gid:%d / gid:%d\n", attr->st_gid, attr->st_uid);
+    }
+    if (valid & FUSE_SET_ATTR_SIZE) {
+        printf("set size ...:%ld\n", attr->st_size);
+    }
+	fuse_reply_attr(req, attr, 1.0);
 }
 
 static void tcloudfs_access(fuse_req_t req, fuse_ino_t ino, int mask) {
@@ -544,7 +555,7 @@ static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
                       mode_t mode, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, parent:%" PRIu64 "\n", __FUNCTION__,
            __LINE__, fuse_req_userdata(req), parent);
-	struct fuse_entry_param e;
+    struct fuse_entry_param e;
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
     if (parent == 1) {
@@ -571,14 +582,18 @@ static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     e.ino = (fuse_ino_t)n;
     e.attr.st_mode = S_IFREG;
     e.attr.st_size = 0;
-		fuse_reply_create(req, &e, fi);
-    // fuse_reply_err(req, 0);
+    e.generation = e.ino;
+    e.attr_timeout = 1.0;
+    e.entry_timeout = 1.0;
+    fuse_reply_create(req, &e, fi);
 }
 static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
-    fuse_reply_err(req, 0);
+    fi->direct_io = 1;
+    fuse_reply_open(req, fi);
 }
+
 static void lo_release(fuse_req_t req, fuse_ino_t ino,
                        struct fuse_file_info *fi) {
     (void)ino;
@@ -587,13 +602,59 @@ static void lo_release(fuse_req_t req, fuse_ino_t ino,
            fuse_req_userdata(req), ino);
     fuse_reply_err(req, 0);
 }
-static void lo_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t offset,
-                    struct fuse_file_info *fi) {
+
+void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
+                   struct fuse_file_info *fi) {
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
+    char* ptr = malloc(size + off);
+	fuse_reply_buf(req, ptr + off, size);
+    free(ptr);
+}
+
+void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
+                    size_t size, off_t off, struct fuse_file_info *fi) {
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node = NULL;
+    if (ino == 1) {
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
+    }
+    
+    if (!S_ISREG(node->mode)) {
+        
+    }
+#if 0
+    // size_t length =fuse_buf_size(buf);
+    // do_write_buf(req, size, off, in_buf, fi);
+    char *path = NULL;
+    asprintf(&path, "/tmp/%s", node->name);
+    int fd = open(path, O_CREAT|O_APPEND, 0755);
+    free(path);
+    lseek(fd, off, SEEK_SET);
+    write(fd, buf, size);
+    close(fd);
+#endif
+    node->size = off + size;
+    fuse_reply_write(req, size);
+}
+static void tcloudfs_flush(fuse_req_t req, fuse_ino_t ino,
+                           struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
     fuse_reply_err(req, 0);
 }
-static void lo_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence,
+
+static void tcloudfs_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence,
                      struct fuse_file_info *fi) {
     off_t res = 0;
 
@@ -610,9 +671,9 @@ static void lo_statfs(fuse_req_t req, fuse_ino_t ino) {
            fuse_req_userdata(req), ino);
 
     result.f_bsize = 4096;
-    result.f_blocks = 1024 * 1024;
-    result.f_bfree = 1024;
-    result.f_bavail = 1024;
+    result.f_blocks = 1024 * 1024 * 1024;
+    result.f_bfree = 1024 * 1024 *5;
+    result.f_bavail = 1024 * 1024 * 5;
 
     fuse_reply_statfs(req, &result);
 }
@@ -639,9 +700,11 @@ static const struct fuse_lowlevel_ops tcloudfs_ops = {
 
     .create = lo_create,
     .open = lo_open,
+    .write = tcloudfs_write,
     .release = lo_release,
-    .read = lo_read,
-    .lseek = lo_lseek,
+    .flush = tcloudfs_flush,
+    .read = tcloudfs_read,
+    .lseek = tcloudfs_lseek,
     .statfs = lo_statfs,
     .fallocate = lo_fallocate,
 };

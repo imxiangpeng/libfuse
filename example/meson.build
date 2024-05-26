@@ -44,3 +44,8 @@ executable('tcloudfs', ['tcloud/tcloudfs.c', 'tcloud/tcloud_drive.c', 'tcloud/tc
     dependencies: [ thread_dep, libfuse_dep, cjson_library ],
     include_directories: 'tcloud/j2s',
         install: false)
+
+executable('tcloudfs_ll', ['tcloud/tcloudfs_ll.c', 'tcloud/tcloud_drive.c', 'tcloud/tcloud_buffer.c', 'tcloud/j2sobject_cloud.c', 'tcloud/j2s/j2sobject.c'],
+    dependencies: [ thread_dep, libfuse_dep, cjson_library ],
+    include_directories: 'tcloud/j2s',
+        install: false)
