@@ -147,7 +147,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
         printf("%s(%d): child: id:%d, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p->cloud_id, p->name, S_ISDIR(p->mode));
         if (0 == strcmp(name, p->name)) {
             printf("got :%s\n", name);
-            e.attr.st_mode = p->mode | 755;
+            e.attr.st_mode = p->mode | 0755;
             e.attr.st_ino = (fuse_ino_t)p;
             e.attr.st_nlink = S_ISDIR(p->mode) ? 1 : 2;
             e.attr.st_ctim = node->ctime;
@@ -236,7 +236,7 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
         node = (struct tcloudfs_node *)ino;
     }
 
-    printf("%s(%d): name:%s mode:%o\n", __FUNCTION__, __LINE__, node->name, node->mode);
+    printf("%s(%d): name:%s mode:%o vs %o\n", __FUNCTION__, __LINE__, node->name, node->mode, 0755);
     st.st_ino = (fuse_ino_t)node;
     st.st_mode = node->mode | 0755;
     st.st_nlink = 1;
@@ -607,8 +607,20 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
                    struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
-    char* ptr = malloc(size + off);
-	fuse_reply_buf(req, ptr + off, size);
+    char* ptr = malloc(size /*+ off*/);
+#if 0    
+    struct fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
+    buf.buf[0].flags = static_cast<fuse_buf_flags>(
+        FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK);
+    buf.buf[0].mem = ptr + off;
+    buf.buf[0].size = size;
+
+    fuse_reply_data(req, &buf, FUSE_BUF_COPY_FLAGS)   
+#endif    
+    *ptr = 'm';
+    *(ptr+1)= 'x';
+    *(ptr+2)= 'x';
+	fuse_reply_buf(req, ptr /*+ off*/, size);
     free(ptr);
 }
 
