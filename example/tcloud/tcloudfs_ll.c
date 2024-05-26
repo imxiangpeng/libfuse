@@ -44,7 +44,7 @@ struct tcloudfs_node {
     // directory child lists
     struct tcloudfs_node *parent;
     struct hr_list_head entry;
-    struct hr_list_head head;  // folder head
+    struct hr_list_head childs;  // folder head
 };
 struct tcloudfs_priv {
     pthread_mutex_t mutex;
@@ -97,11 +97,11 @@ static struct tcloudfs_node *allocate_node(int cloud_id, const char *name,
     node->name = strdup(name);
     node->parent = parent;
     HR_INIT_LIST_HEAD(&node->entry);
-    HR_INIT_LIST_HEAD(&node->head);
+    HR_INIT_LIST_HEAD(&node->childs);
 
     if (parent) {
         node->parent = parent;
-        hr_list_add_tail(&node->entry, &parent->head);
+        hr_list_add_tail(&node->entry, &parent->childs);
     }
 
     return node;
@@ -143,7 +143,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.attr_timeout = 1.0;
     e.entry_timeout = 1.0;
 
-    hr_list_for_each_entry(p, &node->head, entry) {
+    hr_list_for_each_entry(p, &node->childs, entry) {
         printf("%s(%d): child: id:%d, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p->cloud_id, p->name, S_ISDIR(p->mode));
         if (0 == strcmp(name, p->name)) {
             printf("got :%s\n", name);
@@ -190,14 +190,14 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     if (S_ISDIR(node->mode)) {
         pthread_mutex_lock(&priv->mutex);
         // move all childs and this node to delete pending queue
-        if (!hr_list_empty(&node->head)) {
+        if (!hr_list_empty(&node->childs)) {
             // new link last node -> origin link head (tail)
-            node->head.prev->next = &priv->delete_pending_queue;
+            node->childs.prev->next = &priv->delete_pending_queue;
             // origin link prev(origin tail) -> new link first node
-            node->head.next->prev = priv->delete_pending_queue.prev;
+            node->childs.next->prev = priv->delete_pending_queue.prev;
 
-            priv->delete_pending_queue.prev->next = node->head.next;
-            priv->delete_pending_queue.prev = node->head.prev;
+            priv->delete_pending_queue.prev->next = node->childs.next;
+            priv->delete_pending_queue.prev = node->childs.prev;
 
             // keep this node later? only remove child node ?
             // hr_list_del(&node->entry);
@@ -369,7 +369,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
                __FUNCTION__, __LINE__, fuse_req_userdata(req), ino, size, offset, fi, now, node->expire_time);
 
         if (node->expire_time < now) {
-            node->expire_time = now + 5;  // expire after 5s
+            node->expire_time = now + 50000;  // expire after 5s
             // 1. free all cached object
             struct j2scloud_folder_resp *dir = NULL;
             struct stat st;
@@ -388,7 +388,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
             struct tcloudfs_node *p = NULL, *n = NULL;
 
-            hr_list_for_each_entry_safe(p, n, &node->head, entry) {
+            hr_list_for_each_entry_safe(p, n, &node->childs, entry) {
                 printf("remove expire nodes: %p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
                 hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
             }
@@ -482,7 +482,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
                                        &st, node->data->offset + entlen);
             node->data->offset += entlen;
 
-            hr_list_for_each_entry(p, &node->head, entry) {
+            hr_list_for_each_entry(p, &node->childs, entry) {
                 printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
                 st.st_mode = p->mode /*S_IFDIR*/;
                 st.st_ino = (fuse_ino_t)p;
@@ -551,6 +551,43 @@ static void lo_releasedir(fuse_req_t req, fuse_ino_t ino,
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
 }
 
+static void tcloudfs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
+			   mode_t mode) {
+    printf("%s(%d): .........priv:%p, parent:%" PRIu64 ", name:%s, mode:%o\n", __FUNCTION__,
+           __LINE__, fuse_req_userdata(req), parent, name, mode);
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node = NULL;
+    if (parent == 1) {
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)parent;
+    }
+
+    if (!node) {
+        fuse_reply_err(req, EOPNOTSUPP);
+        return;
+    }
+
+    struct fuse_entry_param e;
+
+    struct tcloudfs_node *n = allocate_node(-11, name, node);
+    n->mode = S_IFDIR| mode;
+
+    e.ino = (fuse_ino_t)n;
+    e.attr.st_mode = n->mode;
+    e.attr.st_size = 0;
+    e.generation = e.ino;
+    e.attr_timeout = 1.0;
+    e.entry_timeout = 1.0;
+
+    fuse_reply_entry(req, &e);
+}
 static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
                       mode_t mode, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, parent:%" PRIu64 "\n", __FUNCTION__,
@@ -577,10 +614,10 @@ static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     }
 
     struct tcloudfs_node *n = allocate_node(-11, name, node);
-    n->mode = S_IFREG;
+    n->mode = S_IFREG| mode;
 
     e.ino = (fuse_ino_t)n;
-    e.attr.st_mode = S_IFREG;
+    e.attr.st_mode = S_IFREG | mode;
     e.attr.st_size = 0;
     e.generation = e.ino;
     e.attr_timeout = 1.0;
@@ -709,6 +746,7 @@ static const struct fuse_lowlevel_ops tcloudfs_ops = {
     .opendir = tcloudfs_opendir,
     .readdir = tcloudfs_readdir,
     .releasedir = lo_releasedir,
+    .mkdir = tcloudfs_mkdir,
 
     .create = lo_create,
     .open = lo_open,

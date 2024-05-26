@@ -44,7 +44,7 @@ struct tcloudfs_node {
     // directory child lists
     struct tcloudfs_node *parent;
     struct hr_list_head entry;
-    struct hr_list_head head;  // folder head
+    struct hr_list_head childs;  // folder head
 };
 struct tcloudfs_priv {
     pthread_mutex_t mutex;
@@ -97,11 +97,11 @@ static struct tcloudfs_node *allocate_node(int cloud_id, const char *name,
     node->name = strdup(name);
     node->parent = parent;
     HR_INIT_LIST_HEAD(&node->entry);
-    HR_INIT_LIST_HEAD(&node->head);
+    HR_INIT_LIST_HEAD(&node->childs);
 
     if (parent) {
         node->parent = parent;
-        hr_list_add_tail(&node->entry, &parent->head);
+        hr_list_add_tail(&node->entry, &parent->childs);
     }
 
     return node;
@@ -143,7 +143,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.attr_timeout = 1.0;
     e.entry_timeout = 1.0;
 
-    hr_list_for_each_entry(p, &node->head, entry) {
+    hr_list_for_each_entry(p, &node->childs, entry) {
         printf("%s(%d): child: id:%d, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p->cloud_id, p->name, S_ISDIR(p->mode));
         if (0 == strcmp(name, p->name)) {
             printf("got :%s\n", name);
@@ -190,14 +190,14 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     if (S_ISDIR(node->mode)) {
         pthread_mutex_lock(&priv->mutex);
         // move all childs and this node to delete pending queue
-        if (!hr_list_empty(&node->head)) {
+        if (!hr_list_empty(&node->childs)) {
             // new link last node -> origin link head (tail)
-            node->head.prev->next = &priv->delete_pending_queue;
+            node->childs.prev->next = &priv->delete_pending_queue;
             // origin link prev(origin tail) -> new link first node
-            node->head.next->prev = priv->delete_pending_queue.prev;
+            node->childs.next->prev = priv->delete_pending_queue.prev;
 
-            priv->delete_pending_queue.prev->next = node->head.next;
-            priv->delete_pending_queue.prev = node->head.prev;
+            priv->delete_pending_queue.prev->next = node->childs.next;
+            priv->delete_pending_queue.prev = node->childs.prev;
 
             // keep this node later? only remove child node ?
             // hr_list_del(&node->entry);
@@ -377,7 +377,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
             struct tcloudfs_node *p = NULL, *n = NULL;
 
-            hr_list_for_each_entry_safe(p, n, &node->head, entry) {
+            hr_list_for_each_entry_safe(p, n, &node->childs, entry) {
                 printf("remove expire nodes: %p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
                 hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
             }
@@ -471,7 +471,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
                                        &st, node->data->offset + entlen);
             node->data->offset += entlen;
 
-            hr_list_for_each_entry(p, &node->head, entry) {
+            hr_list_for_each_entry(p, &node->childs, entry) {
                 printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
                 st.st_mode = p->mode /*S_IFDIR*/;
                 st.st_ino = (fuse_ino_t)p;
