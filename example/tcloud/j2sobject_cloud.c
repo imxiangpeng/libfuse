@@ -33,13 +33,13 @@ struct j2sobject_prototype j2scloud_folder_prototype = {
 
 
 static struct j2sobject_fields_prototype _j2scloud_folder_fields_prototype[] = {
-    {.name = "id", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(id), .offset_len = 0},
+    {.name = "id", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(id), .offset_len = 0},
     {.name = "name", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(name), .offset_len = 0},
     {.name = "createDate", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(createDate), .offset_len = 0},
     {.name = "lastOpTime", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(lastOpTime), .offset_len = 0},
-    // {.name = "rev", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(rev), .offset_len = 0},
+    // {.name = "rev", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(rev), .offset_len = 0},
     {.name = "rev", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(rev), .offset_len = 0},
-    {.name = "parentId", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(parentId), .offset_len = 1},
+    {.name = "parentId", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FOLDER_FIELDS_OFFSET(parentId), .offset_len = 1},
     {0}};
 
 static int j2scloud_folder_ctor(struct j2sobject *obj) {
@@ -84,14 +84,14 @@ struct j2sobject_prototype j2scloud_file_prototype = {
     .dtor = NULL};
 
 static struct j2sobject_fields_prototype _j2scloud_file_fields_prototype[] = {
-    {.name = "id", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(id), .offset_len = 0},
+    {.name = "id", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(id), .offset_len = 0},
     {.name = "name", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(name), .offset_len = 0},
     {.name = "createDate", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(createDate), .offset_len = 0},
     {.name = "lastOpTime", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(lastOpTime), .offset_len = 0},
-    // {.name = "rev", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(rev), .offset_len = 0},
+    // {.name = "rev", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(rev), .offset_len = 0},
     {.name = "rev", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(rev), .offset_len = 0},
-    {.name = "parentId", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(parentId), .offset_len = 0},
-    {.name = "size", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(size), .offset_len = 0},
+    {.name = "parentId", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(parentId), .offset_len = 0},
+    {.name = "size", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(size), .offset_len = 0},
     {.name = "md5", .type = J2S_STRING, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(md5), .offset_len = _J2SOBJECT_CLOUD_FILE_FIELDS_LEN(md5)},
     {.name = "mediaType", .type = J2S_INT, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(mediaType), .offset_len = 0},
     {.name = "orientation", .type = J2S_INT, .offset = _J2SOBJECT_CLOUD_FILE_FIELDS_OFFSET(orientation), .offset_len = 0},
@@ -120,7 +120,7 @@ static struct j2sobject_fields_prototype _j2scloud_folder_resp_fields_prototype[
     {.name = "fileListSize", .type = J2S_INT, .offset = _J2SOBJECT_CLOUD_FOLDER_RESP_FIELDS_OFFSET(fileListSize), .offset_len = 0},
     {.name = "folderList", .type = J2S_ARRAY, .offset = _J2SOBJECT_CLOUD_FOLDER_RESP_FIELDS_OFFSET(folderList), .offset_len = 0, .proto = &j2scloud_folder_prototype},
     {.name = "fileList", .type = J2S_ARRAY, .offset = _J2SOBJECT_CLOUD_FOLDER_RESP_FIELDS_OFFSET(fileList), .offset_len = 0, .proto = &j2scloud_file_prototype},
-    {.name = "lastRev", .type = J2S_DOUBLE, .offset = _J2SOBJECT_CLOUD_FOLDER_RESP_FIELDS_OFFSET(lastRev), .offset_len = 0},
+    {.name = "lastRev", .type = J2S_LONG, .offset = _J2SOBJECT_CLOUD_FOLDER_RESP_FIELDS_OFFSET(lastRev), .offset_len = 0},
     {0}};
 
 

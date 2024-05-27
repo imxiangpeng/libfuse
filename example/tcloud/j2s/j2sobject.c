@@ -18,8 +18,12 @@
 //                do not output null elements
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include <json-c/arraylist.h>
+#include <json-c/json_object.h>
+#include <json-c/json_types.h>
 #include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #endif
 #include <errno.h>
 #include <fcntl.h>
@@ -31,7 +35,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef USE_CJSON
 #include "cjson/cJSON.h"
+#else
+#include "json-c/json.h"
+#endif
 #include "j2sobject.h"
 
 #define TMPFILE_TEMPLATE ".tmp_XXXXXX"
@@ -195,6 +203,16 @@ struct j2sobject *j2sobject_create(struct j2sobject_prototype *proto) {
 
                 break;
             }
+            case J2S_LONG:
+            case J2S_LONG| J2S_ARRAY: {
+                long *ptr = (long *)((char *)self + pt->offset);
+                for (unsigned i = 0; i < pt->offset_len; i++) {
+                    ptr[i] = NAN;
+                }
+
+                break;
+            }
+                       
             default:
                 break;
         }
@@ -324,6 +342,7 @@ int j2sobject_reset(struct j2sobject *self) {
     return 0;
 }
 
+#if USE_CJSON
 // j2sobject array should contains child's proto, otherwise we can not create
 // child object
 // we only support [{},{}]
@@ -788,6 +807,468 @@ char *j2sobject_serialize(struct j2sobject *self) {
 
     return data;
 }
+#else
+// not support [1,2,3,...] or ["x","y",...]
+static int _j2sobject_deserialize_array_json(struct j2sobject *self, struct json_object *jobj) {
+    unsigned int i = 0;
+    if (!self || self->type != J2S_ARRAY || !jobj || !json_object_is_type(jobj, json_type_array)) {
+        return -1;
+    }
+
+    // assert self's prev/next have been inited
+    for (i = 0; i < json_object_array_length(jobj); i++) {
+        struct j2sobject *child = j2sobject_create(self->proto);
+
+        if (j2sobject_deserialize_json(child, json_object_array_get_idx(jobj, i)) != 0) {
+            j2sobject_free(child);
+            return -1;  // continue or fail!
+        }
+
+        // add to array list
+        self->prev->next = child;
+        child->prev = self->prev;
+        child->next = self;
+        self->prev = child;
+    }
+    return 0;
+}
+
+// not support inner loop
+int j2sobject_deserialize_json(struct j2sobject *self, void *jobj) {
+    struct json_object *root = jobj;
+    if (!jobj || !self) return -1;
+
+    if (json_object_is_type(root, json_type_array)) {
+        return _j2sobject_deserialize_array_json(self, root);
+    }
+
+    if (!json_object_is_type(root, json_type_object)) return -1;
+
+    json_object_object_foreach(root, key, val) {
+        const struct j2sobject_fields_prototype *pt = NULL;
+        if (!val) continue;
+
+        pt = j2sobject_field_prototype(J2SOBJECT(self), key);
+        if (!pt) {
+            printf("struct not support key:%s ignored!\n", key);
+            continue;
+        }
+
+        switch (json_object_get_type(val)) {
+            printf("type :%d\n", json_object_get_type(val));
+            case json_type_int: {
+                printf("%s(%d): number:%d\n", __FUNCTION__, __LINE__, json_object_get_int(val));
+                if (pt->type == J2S_INT) {
+                    int *ptr = (int *)((char *)self + pt->offset);
+                    *ptr = json_object_get_int(val);
+                } else if (pt->type == J2S_DOUBLE) {
+                    double *ptr = (double *)((char *)self + pt->offset);
+                    *ptr = json_object_get_double(val);
+                } else if (pt->type == J2S_LONG) {
+                    long *ptr = (long *)((char *)self + pt->offset);
+                    *ptr = json_object_get_int64(val);
+                }
+                
+
+                break;
+            }
+            case json_type_string: {
+                // do not free cJSON_Print memory, it willed be freed when object is deallocate
+                if (pt->offset_len == 0) {  // char *
+                    char **ptr = (char **)((char *)self + pt->offset);
+                    *ptr = strdup(json_object_get_string(val));
+                } else {  // char[]
+                    char *ptr = (char *)((char *)self + pt->offset);
+                    // make sure no data loss
+                    if (strlen(json_object_get_string(val)) > pt->offset_len - 1) {
+                        printf("string value too long ..., allow max:%d\n", pt->offset_len);
+                        goto error;
+                    }
+                    snprintf(ptr, pt->offset_len, "%s", json_object_get_string(val));
+                }
+                break;
+            }
+            case json_type_object: {
+                // pt->offset_len 0: -> pointer
+                //              > 0: -> struct data
+                struct j2sobject *child = NULL;
+                if (pt->offset_len == 0) {
+                    struct j2sobject **ptr = (struct j2sobject **)((char *)self + pt->offset);
+                    child = j2sobject_create(pt->proto);
+                    *ptr = child;
+                } else {
+                    child = (struct j2sobject *)((char *)self + pt->offset);
+                    // must call init to setup prototype
+                    pt->proto->ctor(child);
+                }
+                j2sobject_deserialize_json(child, val);
+            } break;
+            case json_type_array: {
+                // detect whether it's basic array
+                struct json_object *item = json_object_array_get_idx(val, 0);
+                if (json_object_is_type(item, json_type_int)) {
+                    unsigned int i = 0;
+                    if (pt->offset_len == 0) {
+                        printf("not support current basic array ...\n");
+                        continue;
+                    }
+                    for (i = 0; i < json_object_array_length(val); i++) {
+                    // now the fields is the int/double array point
+                        if (pt->type == J2S_INT || pt->type == (J2S_INT | J2S_ARRAY)) {
+                            int *ptr = (int *)((char *)self + pt->offset);
+                            ptr[i] = json_object_get_int(json_object_array_get_idx(val, i));
+                        } else if (pt->type == J2S_DOUBLE || pt->type == (J2S_DOUBLE | J2S_ARRAY)) {
+                            double *ptr = (double *)((char *)self + pt->offset);
+                            ptr[i] = json_object_get_int(json_object_array_get_idx(val, i));
+                        }
+                        i++;
+                        // skip when not enough
+                        if (i == pt->offset_len) break;
+                    }
+                    continue;
+                }
+                if (json_object_is_type(item, json_type_string)) {
+                    unsigned int i = 0;
+                    if (pt->type != (J2S_ARRAY | J2S_STRING)) {
+                        continue;
+                    }
+
+                    if (pt->offset_len == 0) {
+                        printf("not support current basic array ...\n");
+                        continue;
+                    }
+
+                    // now the fields is the string array
+                    for (i = 0; i < json_object_array_length(val); i++) {
+                        char **ptr = (char **)((char *)self + pt->offset);
+                        *(ptr + i) = strdup(json_object_get_string(json_object_array_get_idx(val, i)));
+                        i++;
+                        // skip when not enough
+                        if (i == pt->offset_len) break;
+                    }
+                    continue;
+                }
+
+                // following only support object array
+                if (!json_object_is_type(item, json_type_object)) {
+                    continue;
+                }
+
+                // now it's no basic array
+                // array 's proto is array subobject's proto
+                struct j2sobject *child = NULL;
+                if (pt->offset_len == 0) {
+                    struct j2sobject **ptr = (struct j2sobject **)((char *)self + pt->offset);
+                    child = j2sobject_create_array(pt->proto);
+                    *ptr = child;
+                } else {
+                    child = (struct j2sobject *)((char *)self + pt->offset);
+                    // must call init to setup prototype
+                    pt->proto->ctor(child);
+                }
+                _j2sobject_deserialize_array_json(child, val);
+            } break;
+
+            default:
+                break;
+        }
+    }
+
+    return 0;
+error:
+    return -1;
+}
+
+int j2sobject_deserialize(struct j2sobject *self, const char *jstr) {
+    int ret = -1;
+    if (!jstr || !self) {
+        return -1;
+    }
+
+    struct json_object *root = json_tokener_parse(jstr);
+    if (!root) {
+        return -1;
+    }
+
+    ret = j2sobject_deserialize_json(self, root);
+
+    json_object_put(root);
+
+    return ret;
+}
+
+int j2sobject_deserialize_file(struct j2sobject *self, const char *path) {
+    int ret = -1;
+    size_t len = 0;
+    char *data = NULL;
+    struct json_object *root = NULL;
+    if (!path || !self) {
+        return -1;
+    }
+
+    len = _read_file(path, &data);
+    if (!data) {
+        printf("can not read file:%s\n", path);
+        return -1;
+    }
+    
+	json_tokener *tok = json_tokener_new_ex(-1);
+	root = json_tokener_parse_ex(tok, data, len); 
+	json_tokener_free(tok);
+    if (!root) {
+        printf("can not read file:%s, data:%s\n", path, data);
+        printf("error:%s\n", json_tokener_error_desc(json_tokener_get_error(tok)));
+        free(data);
+        return -1;
+    }
+
+    ret = j2sobject_deserialize_json(self, root);
+
+
+    free(data);
+    return ret;
+}
+
+int j2sobject_deserialize_target(struct j2sobject *self, const char *jstr, const char *target) {
+    int ret = -1;
+    struct json_object *root, *object;
+    if (!jstr || !self) {
+        return -1;
+    }
+
+    root = object = json_tokener_parse(jstr);
+    if (!root) {
+        return -1;
+    }
+    
+    printf("%s(%d): ...............\n", __FUNCTION__, __LINE__);
+
+    if (target != NULL) {
+        if (!json_object_object_get_ex(root, target, &object)){
+    printf("%s(%d): ........can not found target:%s.......\n", __FUNCTION__, __LINE__, target);
+
+            json_object_put(root);
+            return -1;
+        }
+    }
+
+    printf("%s(%d): .....try deserialize..........\n", __FUNCTION__, __LINE__);
+
+    ret = j2sobject_deserialize_json(self, object);
+
+    printf("%s(%d): ......out.........\n", __FUNCTION__, __LINE__);
+
+    json_object_put(root);
+
+    return ret;
+}
+
+static int _j2sobject_serialize_array_json(struct j2sobject *self, struct json_object *target) {
+    struct j2sobject *e = NULL;
+    if (!self || self->type != J2S_ARRAY || !target || !json_object_is_type(target, json_type_array)) return -1;
+
+    // loop all elements free all element
+    for (e = self->next; e != self; e = e->next) {
+        struct json_object *object = json_object_new_object();
+        j2sobject_serialize_json(e, object);
+        json_object_array_add(target, object);
+    }
+
+    return 0;
+}
+
+
+int j2sobject_serialize_json(struct j2sobject *self, void *target) {
+    if (!target) return -1;
+
+    struct json_object *root = target;
+    const struct j2sobject_fields_prototype *pt = NULL;
+
+    if (!self || !root) {
+        return -1;
+    }
+
+    if (self->type == J2S_ARRAY) {
+        return _j2sobject_serialize_array_json(self, target);
+    }
+
+    pt = self->field_protos;
+
+    if (!pt || self->type != J2S_OBJECT) return -1;
+
+    for (; pt->name != NULL; pt++) {
+        switch (pt->type) {
+            case J2S_INT: {
+                if (pt->offset_len > 0) {
+                    int *ptr = (int *)((char *)self + pt->offset);
+                    struct json_object *array = json_object_new_array();
+                    for (unsigned i = 0; i < pt->offset_len; i++) {
+                        if (ptr[i] == INT_MAX) break;
+                        json_object_array_add(array, json_object_new_int(ptr[i]));
+                    }
+                    json_object_object_add(root, pt->name, array);
+                } else {
+                    int num = *(int *)((char *)self + pt->offset);
+                    json_object_object_add(root, pt->name, json_object_new_int(num));
+                }
+                break;
+            }
+            case J2S_INT | J2S_ARRAY: {
+                // not support array
+                if (pt->offset_len == 0) continue;
+
+                int *ptr = (int *)((char *)self + pt->offset);
+                struct json_object *array = json_object_new_array();
+                for (unsigned i = 0; i < pt->offset_len; i++) {
+                    if (ptr[i] == INT_MAX) break;
+                    json_object_array_add(array, json_object_new_int(ptr[i]));
+                }
+                json_object_object_add(root, pt->name, array);
+
+                break;
+            }
+            case J2S_DOUBLE: {
+                if (pt->offset_len > 0) {
+                    double *ptr = (double *)((char *)self + pt->offset);
+                    struct json_object *array = json_object_new_array();
+                    for (unsigned i = 0; i < pt->offset_len; i++) {
+                        if (ptr[i] == NAN) break;
+                        json_object_array_add(array, json_object_new_double(ptr[i]));
+                    }
+                    json_object_object_add(root, pt->name, array);
+                } else {
+                    double num = *(double *)((char *)self + pt->offset);
+                    json_object_object_add(root, pt->name, json_object_new_double(num));
+                }
+                break;
+            }
+            case J2S_DOUBLE | J2S_ARRAY: {
+                // not support array
+                if (pt->offset_len == 0) continue;
+                double *ptr = (double *)((char *)self + pt->offset);
+
+                    struct json_object *array = json_object_new_array();
+                for (unsigned i = 0; i < pt->offset_len; i++) {
+                    if (ptr[i] == NAN) break;
+                    json_object_array_add(array, json_object_new_double(ptr[i]));
+                }
+                json_object_object_add(root, pt->name, array);
+                break;
+            }
+             case J2S_LONG: {
+                if (pt->offset_len > 0) {
+                    long *ptr = (long *)((char *)self + pt->offset);
+                    struct json_object *array = json_object_new_array();
+                    for (unsigned i = 0; i < pt->offset_len; i++) {
+                        if (ptr[i] == NAN) break;
+                        json_object_array_add(array, json_object_new_int64((int64_t)ptr[i]));
+                    }
+                    json_object_object_add(root, pt->name, array);
+                } else {
+                    long num = *(long *)((char *)self + pt->offset);
+                    json_object_object_add(root, pt->name, json_object_new_int64((int64_t)num));
+                }
+                break;
+            }
+           
+            case J2S_STRING: {
+                // char* -> char**
+                // char [] -> char*
+                char *str = NULL;
+                if (pt->offset_len == 0) {  // char*
+                    str = *(char **)((char *)self + pt->offset);
+                } else {  // char[]
+                    str = ((char *)self + pt->offset);
+                }
+
+                if (json_object_object_add(root, pt->name, json_object_new_string(str)) != 0) {
+                    // failed we should release
+                    return -1;
+                }
+                break;
+            }
+            case J2S_OBJECT: {
+                struct j2sobject *object = NULL;
+
+                struct json_object *child = json_object_new_object();
+                json_object_object_add(root, pt->name, child);
+                if (pt->offset_len == 0) {
+                    object = *(struct j2sobject **)((char *)self + pt->offset);
+                } else {
+                    object = (struct j2sobject *)((char *)self + pt->offset);
+                }
+                // must manual init object's fields
+                // when it's sub struct, the header maybe invalid
+                if (!object->name) {
+                    pt->proto->ctor(object);
+                }
+                j2sobject_serialize_json(object, child);
+
+                break;
+            }
+            case J2S_ARRAY: {
+                struct j2sobject *object = NULL;
+                    struct json_object *array = json_object_new_array();
+                json_object_object_add(root, pt->name, array);
+                if (pt->offset_len == 0) {
+                    object = *(struct j2sobject **)((char *)self + pt->offset);
+                } else {
+                    object = (struct j2sobject *)((char *)self + pt->offset);
+                }
+                // must manual init object's fields
+                // when it's sub struct, the header maybe invalid
+                if (!object->name) {
+                    pt->proto->ctor(object);
+                }
+
+                _j2sobject_serialize_array_json(object, array);
+
+                break;
+            }
+            case J2S_ARRAY | J2S_STRING: {
+                const char *const *strs = (const char *const *)((char *)self + pt->offset);
+                    struct json_object *array = json_object_new_array();
+                for (unsigned int i = 0; i < pt->offset_len && strs[i] != NULL; i++) {
+                    json_object_array_add(array, json_object_new_string((const char*)strs[i]));
+                }
+                json_object_object_add(root, pt->name, array);
+                break;
+            }
+            default:
+                printf("not support object or array data !\n");
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
+const char *j2sobject_serialize(struct j2sobject *self) {
+    const char *data = NULL;
+    struct json_object *root = NULL;
+
+    if (!self || !self->proto) {
+        return NULL;
+    }
+
+    if (self->type != J2S_OBJECT && self->type != J2S_ARRAY) return NULL;
+
+    if (self->type == J2S_ARRAY) {
+        root = json_object_new_array();
+    } else if (self->type == J2S_OBJECT) {
+        root = json_object_new_object();
+    }
+
+    // should be freed manual ...
+    if (root) {
+        j2sobject_serialize_json(self, root);
+        data = json_object_to_json_string(root);
+    }
+
+    return data;
+}
+
+#endif
 
 int j2sobject_serialize_file(struct j2sobject *self, const char *path) {
     int fd = -1;

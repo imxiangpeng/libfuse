@@ -6,13 +6,13 @@
 // telecom_cloud_ -> j2scloud
 typedef struct j2scloud_folder {
     J2SOBJECT_DECLARE_OBJECT;
-    double id; // long
+    int64_t id; // int64_t
     char *name;
     char *createDate;
     char *lastOpTime;
-    // double rev; // long
-    char *rev; // long
-    double parentId; // long
+    // double rev; // int64_t
+    char *rev; // int64_t
+    int64_t parentId; // int64_t
 
 } j2scloud_folder_t;
 
@@ -26,14 +26,14 @@ typedef struct j2scloud_icon {
 
 typedef struct j2scloud_file {
     J2SOBJECT_DECLARE_OBJECT;
-    double id; // long
+    int64_t id; // int64_t
     char *name;
     char *createDate;
     char *lastOpTime;
-    // double rev; // long 
-    char *rev; // long 
-    double parentId; // long
-    double size; // long
+    // double rev; // int64_t 
+    char *rev; // int64_t 
+    int64_t parentId; // int64_t
+    int64_t size; // int64_t
     char md5[32 + 4];
     int mediaType;
     int orientation;
@@ -53,7 +53,7 @@ typedef struct j2scloud_folder_resp {
     int fileListSize;
     j2scloud_folder_t *folderList;
     j2scloud_file_t *fileList;
-    double lastRev;
+    int64_t lastRev;
 } j2scloud_folder_resp_t;
 
 extern struct j2sobject_prototype j2scloud_folder_prototype;

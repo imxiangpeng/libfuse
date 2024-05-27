@@ -166,7 +166,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
     HR_LIST_HEAD(add_queue);
 
     time_t now = time(NULL);
-    printf("%s(%d): expire :%ld, now :%ld expired:%d?\n", __FUNCTION__, __LINE__, node->expire_time, now);
+    printf("%s(%d): expire :%ld, now :%ld expired:%d?\n", __FUNCTION__, __LINE__, node->expire_time, now, now > node->expire_time);
     if (now < node->expire_time) {
         return 0;
     }
@@ -205,7 +205,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
 
     struct j2scloud_folder_resp *object = dir;
     j2scloud_folder_t *d = NULL;
-    printf("%s(%d): dir using %d\n", __FUNCTION__, __LINE__, node->cloud_id);
+    printf("%s(%d): dir using %ld\n", __FUNCTION__, __LINE__, node->cloud_id);
 
     if (object->folderList) {
         for (d = (j2scloud_folder_t *)J2SOBJECT(object->folderList)->next;
@@ -259,7 +259,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
                 // hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
                 if (p->cloud_id == f->id) {
                     use_cache = 1;
-                    printf("found cache node:%p %d :%s\n", p, p->cloud_id, p->name);
+                    printf("found cache node:%p %ld :%s\n", p, p->cloud_id, p->name);
                     hr_list_move_tail(&p->entry, &node->childs);
 
                     // maybe rename
@@ -289,13 +289,13 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
 
     printf("%s(%d): .....................\n", __FUNCTION__, __LINE__);
     hr_list_for_each_entry_safe(p, n, &node->childs, entry) {
-        printf("now nodes: %p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+        printf("now nodes: %p -> %ld -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
         // hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
     }
 
     printf("%s(%d): .....................\n", __FUNCTION__, __LINE__);
     hr_list_for_each_entry_safe(p, n, &remove_queue, entry) {
-        printf("now remove nodes: %p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+        printf("now remove nodes: %p -> %ld -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
         // hr_list_move_tail(&p->entry, &priv->delete_pending_queue);
     }
     printf("%s(%d): .....................\n", __FUNCTION__, __LINE__);
@@ -304,7 +304,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
 exit_1:
     j2sobject_free(J2SOBJECT(dir));
     hr_list_for_each_entry_safe(p, n, &remove_queue, entry) {
-        printf("remove expire nodes: %p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+        printf("remove expire nodes: %p -> %ld -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
         deallocate_node(p);
     }
     return ret;
@@ -770,7 +770,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         node->data->offset += entlen;
 
         hr_list_for_each_entry(p, &node->childs, entry) {
-            printf("%p -> %d -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
+            printf("%p -> %ld -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
             st.st_mode = p->mode /*S_IFDIR*/;
             st.st_ino = (fuse_ino_t)p;
             entlen = fuse_add_direntry(req, NULL, 0, p->name, NULL, 0);
@@ -1091,7 +1091,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         struct fuse_loop_config *config;
         memset((void *)&_priv, 0, sizeof(_priv));
 
-        printf("sizeof(double):%d, long:%d, long long:%d\n", sizeof(double), sizeof(long), sizeof(long long));
+        printf("sizeof(double):%ld, long:%ld, long long:%ld\n", sizeof(double), sizeof(long), sizeof(long long));
         // return 0;
         pthread_mutex_init(&_priv.mutex, NULL);
 
