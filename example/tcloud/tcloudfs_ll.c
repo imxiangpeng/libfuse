@@ -40,6 +40,7 @@ struct tcloudfs_node {
     off_t offset;
     size_t size;
     mode_t mode;
+    char *download_url;
     struct timespec atime;  //
     struct timespec mtime;  //
     struct timespec ctime;  //
@@ -928,7 +929,40 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info * fi) {
         printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
                fuse_req_userdata(req), ino);
+        struct tcloudfs_priv *priv = fuse_req_userdata(req);
+        struct tcloudfs_node *node = NULL;
+        if (ino == 1) {
+            node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+        } else {
+            // we can directly use parent ino, because it's node pointer
+            // but we should verify it
+            // struct tcloudfs_node *p = NULL;
+            // hr_list_for_each_entry(p, &priv->head, entry) {
+            //
+            // }
+            node = (struct tcloudfs_node *)ino;
+        }
+
+        printf("node :%p  vs fi->fh:%p\n", node, (void *)fi->fh);
+        if (!node) {
+            fuse_reply_err(req, -ENOENT);
+            return;
+        }
+        if (!is_valid_node(node)) {
+            fuse_reply_err(req, -ENOENT);
+            printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+            return;
+        }
+
+       
         fi->direct_io = 1;
+
+        if (node->download_url) {
+            free(node->download_url);
+            node->download_url = NULL;
+        }
+        int ret = tcloud_drive_open(node->cloud_id, &node->download_url);
+        printf("%s(%d): download url is :%s\n", __FUNCTION__, __LINE__, node->download_url ? node->download_url :"none");
         fuse_reply_open(req, fi);
     }
 
@@ -938,6 +972,35 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
         printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
                fuse_req_userdata(req), ino);
+        struct tcloudfs_priv *priv = fuse_req_userdata(req);
+        struct tcloudfs_node *node = NULL;
+        if (ino == 1) {
+            node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+        } else {
+            // we can directly use parent ino, because it's node pointer
+            // but we should verify it
+            // struct tcloudfs_node *p = NULL;
+            // hr_list_for_each_entry(p, &priv->head, entry) {
+            //
+            // }
+            node = (struct tcloudfs_node *)ino;
+        }
+
+        printf("node :%p  vs fi->fh:%p\n", node, (void *)fi->fh);
+        if (!node) {
+            fuse_reply_err(req, -ENOENT);
+            return;
+        }
+        if (!is_valid_node(node)) {
+            fuse_reply_err(req, -ENOENT);
+            printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+            return;
+        }
+
+        if (node->download_url) {
+            free(node->download_url);
+        }
+       
         fuse_reply_err(req, 0);
     }
 
@@ -963,7 +1026,9 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
             return;
         }
 
+        char* url = NULL;
         char *ptr = malloc(size /*+ off*/);
+        tcloud_drive_read(node->cloud_id, &url, ptr, size, off);
 #if 0    
     struct fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
     buf.buf[0].flags = static_cast<fuse_buf_flags>(
@@ -973,9 +1038,9 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
     fuse_reply_data(req, &buf, FUSE_BUF_COPY_FLAGS)
 #endif
-        *ptr = 'm';
-        *(ptr + 1) = 'x';
-        *(ptr + 2) = 'x';
+        // *ptr = 'm';
+        // *(ptr + 1) = 'x';
+        // *(ptr + 2) = 'x';
         if (size + off < node->size) {
             fuse_reply_buf(req, ptr /*+ off*/, size);
         } else {

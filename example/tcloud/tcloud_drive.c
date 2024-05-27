@@ -1,5 +1,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include <json-c/json_object.h>
 #include <stdint.h>
 #endif
 
@@ -114,7 +115,7 @@ int http_post_j2sobject_result(const char *url, struct curl_slist *headers, cons
 
     return ret;
 }
-int driver_http_get(const char *url, struct curl_slist *headers, const char *payload, size_t payload_length, struct tcloud_buffer *result) {
+int driver_http_get(const char *url, struct curl_slist *headers, struct tcloud_buffer *result) {
     CURL *curl;
     CURLcode res;
 
@@ -124,6 +125,7 @@ int driver_http_get(const char *url, struct curl_slist *headers, const char *pay
     }
     // curl_easy_setopt(curl, CURLOPT_URL, /*AUTH_URL*/ "http://10.30.11.78/api/logbox/oauth2/loginSubmit.do");
     curl_easy_setopt(curl, CURLOPT_URL, url);
+  if (headers)
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, result);
@@ -410,7 +412,7 @@ int tcloud_drive_readdir(uint64_t id, struct j2scloud_folder_resp * dir) {
     tcloud_buffer_alloc(&buffer, 2048);
 
   printf("%s(%d): request:%s\n", __FUNCTION__, __LINE__, url);
-    ret = driver_http_get(url, headers, NULL, 0, &buffer);
+    ret = driver_http_get(url, headers, &buffer);
 
     printf("file list: %s\n", buffer.data);
     ret = j2sobject_deserialize_target(dir, buffer.data, "fileListAO");
@@ -458,19 +460,118 @@ static int tcloud_drive_utimens(const char *path, const struct timespec tv[2],
   return 0;
 }
 
-static int tcloud_drive_open(const char *path, struct fuse_file_info *fi) {
+// return real download url
+int tcloud_drive_open(int64_t id, char **path) {
+  int ret = -1;
   printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-  return 0;
+  // https://api.cloud.189.cn/getFileDownloadUrl.action
+    uuid_t uuid;
+    char request_id[UUID_STR_LEN + 20] = {0};
+    char *url = NULL;
+    // const char* url = "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action";
+    struct curl_slist *headers = NULL;
+    const char * secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
+    const char* session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b"; 
+
+    char tmp[512] = {0};
+
+    headers = curl_slist_append(headers, "Accept: application/json;charset=UTF-8");
+    headers = curl_slist_append(headers, "Referer: https://cloud.189.cn");
+    snprintf(tmp, sizeof(tmp), "Sessionkey: %s", session_key);
+    headers = curl_slist_append(headers, tmp);
+
+    // 生成UUID
+    uuid_generate(uuid);
+
+    ret = snprintf(request_id, sizeof(request_id), "%s", "X-Request-ID: ");
+    // 将UUID转换为字符串形式
+    uuid_unparse(uuid, request_id + ret);
+
+    printf("Generated UUID: %s\n", request_id + ret);
+
+    headers = curl_slist_append(headers, request_id);
+
+    // generate query payload
+
+  printf("id:%ld\n", id);
+    const int page_size = 100;
+    int page_num = 1;
+
+    //    CURLU *url = curl_url();
+    // curl_url_set(url, CURLUPART_URL, "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action");
+    // snprintf(tmp, sizeof(tmp))
+    // "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action?folderId=%d"
+    // 
+    asprintf(&url,
+             "https://api.cloud.189.cn/getFileDownloadUrl.action"
+             // "http://10.30.11.78/listFiles.action"
+             "?fileId=%ld"
+             "&clientType=%s&version=%s&channelId=%s&rand=%d_%d",
+             id,
+             PC, VERSION, CHANNEL_ID, rand(), rand());
+
+    char date[64] = {0};
+    http_gmt_date(date, sizeof(date));
+    printf("date:%s\n", date);
+
+    snprintf(tmp, sizeof(tmp), "Date: %s", date);
+    headers = curl_slist_append(headers, tmp);
+
+    char *signature = signatureOfHmac(secret, session_key, "GET", url, date, NULL);
+
+    printf("signature:%s\n", signature);
+
+    int offset = strlen("Signature: ");
+
+    signature = realloc(signature, strlen(signature) + offset);
+
+    memcpy(signature + offset, signature, strlen(signature));
+    memcpy(signature, "Signature: ", offset);
+    headers = curl_slist_append(headers, signature);
+
+    struct tcloud_buffer buffer;
+
+    tcloud_buffer_alloc(&buffer, 2048);
+
+  printf("%s(%d): request:%s\n", __FUNCTION__, __LINE__, url);
+    ret = driver_http_get(url, headers, &buffer);
+
+    printf("file list: %s\n", buffer.data);
+    printf("ret:%d\n", ret);
+  
+    struct json_object *root = json_tokener_parse(buffer.data);
+    if (root) {
+  printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+printf("%s(%d): ...root:%s.....\n", __FUNCTION__, __LINE__, json_object_to_json_string_ext(root, JSON_C_TO_STRING_NOSLASHESCAPE));
+      struct json_object *download_url;
+      if (json_object_object_get_ex(root, "fileDownloadUrl", &download_url)) {
+  printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+        *path = strdup(json_object_get_string(download_url));
+      ret = 0;
+      }
+  printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+    }
+
+  printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+    json_object_put(root);
+    tcloud_buffer_free(&buffer);
+    curl_slist_free_all(headers);
+    free(url);
+    return 0;
 }
 static int tcloud_drive_release(const char *path, struct fuse_file_info *fi) {
   printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
   return 0;
 }
 
-static int tcloud_drive_read(const char *path, char *rbuf, size_t size,
-                             off_t offset, struct fuse_file_info *fi) {
+size_t tcloud_drive_read(int64_t id, char *url, char *rbuf, size_t size, off_t offset2) {
   printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-  return 0;
+  // https://api.cloud.189.cn/getFileDownloadUrl.action
+  struct     tcloud_buffer b;
+  tcloud_buffer_alloc(&b, size);
+  driver_http_get(url, NULL, &b);
+  memcpy(rbuf, b.data, b.offset);
+    return b.offset;
 }
 static int tcloud_drive_write(const char *path, const char *wbuf, size_t size,
                               off_t offset, struct fuse_file_info *fi) {
