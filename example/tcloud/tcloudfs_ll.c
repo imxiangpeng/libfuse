@@ -155,7 +155,7 @@ static bool is_valid_node(struct tcloudfs_node *node) {
 
     HASH_FIND_PTR(_priv.hash_node_lists, &node, n);
 
-    printf("%s(%d): find:%p, valid node :%p == %d\n", __FUNCTION__, __LINE__, node, n, node == n);
+    // printf("%s(%d): find:%p, valid node :%p == %d\n", __FUNCTION__, __LINE__, node, n, node == n);
 
     return node == n;
 }
@@ -166,7 +166,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
     HR_LIST_HEAD(add_queue);
 
     time_t now = time(NULL);
-    printf("%s(%d): expire :%ld, now :%ld expired:%d?\n", __FUNCTION__, __LINE__, node->expire_time, now, now > node->expire_time);
+    printf("%s(%d): current dir:%s(%p), expire :%ld, now :%ld expired:%d?\n", __FUNCTION__, __LINE__, node->name, node, node->expire_time, now, now > node->expire_time);
     if (now < node->expire_time) {
         return 0;
     }
@@ -356,7 +356,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     //}
 
     hr_list_for_each_entry(p, &node->childs, entry) {
-        printf("%s(%d): child: id:%ld, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p->cloud_id, p->name, S_ISDIR(p->mode));
+        printf("%s(%d): node:%p,  child: id:%ld, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p,  p->cloud_id, p->name, S_ISDIR(p->mode));
         if (0 == strcmp(name, p->name)) {
             printf("got :%s\n", name);
             e.attr.st_mode = p->mode | TCLOUDFS_DEFAULT_MODE;
@@ -466,6 +466,7 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
     st.st_ino = (fuse_ino_t)node;
     st.st_mode = node->mode | TCLOUDFS_DEFAULT_MODE;
     st.st_nlink = 1;
+    st.st_atim = node->atime;
     st.st_ctim = node->ctime;
     st.st_mtim = node->mtime;
     if (S_ISREG(node->mode)) {

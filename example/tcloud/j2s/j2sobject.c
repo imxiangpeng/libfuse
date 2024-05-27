@@ -1023,6 +1023,7 @@ int j2sobject_deserialize_file(struct j2sobject *self, const char *path) {
     }
 
     ret = j2sobject_deserialize_json(self, root);
+    json_object_put(root);
 
 
     free(data);
@@ -1062,6 +1063,49 @@ int j2sobject_deserialize_target(struct j2sobject *self, const char *jstr, const
 
     return ret;
 }
+int j2sobject_deserialize_target_file(struct j2sobject *self, const char *path, const char *target) {
+    int ret = -1;
+    size_t len = 0;
+    char *data = NULL;
+    struct json_object *root, *object;
+    if (!path || !self) {
+        return -1;
+    }
+
+    len = _read_file(path, &data);
+    if (!data) {
+        printf("can not read file:%s\n", path);
+        return -1;
+    }
+    
+    printf("read data:%s\n", data);
+    
+	json_tokener *tok = json_tokener_new();
+	root = object = json_tokener_parse_ex(tok, data, len); 
+	json_tokener_free(tok);
+    if (!root) {
+        printf("can not read file:%s, data:%s\n", path, data);
+        printf("error:%s\n", json_tokener_error_desc(json_tokener_get_error(tok)));
+        free(data);
+        return -1;
+    }
+    if (target != NULL) {
+        if (!json_object_object_get_ex(root, target, &object)){
+            printf("%s(%d): ........can not found target:%s.......\n", __FUNCTION__, __LINE__, target);
+            json_object_put(root);
+            return -1;
+        }
+    }
+
+
+    ret = j2sobject_deserialize_json(self, object);
+
+    json_object_put(root);
+
+    free(data);
+    return ret;
+}
+
 
 static int _j2sobject_serialize_array_json(struct j2sobject *self, struct json_object *target) {
     struct j2sobject *e = NULL;
