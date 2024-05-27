@@ -77,6 +77,7 @@ int j2sobject_reset(struct j2sobject *self);
 int j2sobject_deserialize(struct j2sobject *self, const char *jstr);
 int j2sobject_deserialize_cjson(struct j2sobject *self, struct cJSON *jobj);
 int j2sobject_deserialize_file(struct j2sobject *self, const char *path);
+int j2sobject_deserialize_target(struct j2sobject *self, const char *jstr, const char *target);
 int j2sobject_deserialize_target_file(struct j2sobject *self, const char *path, const char *target);
 // must be freed manually
 char *j2sobject_serialize(struct j2sobject *self);

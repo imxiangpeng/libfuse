@@ -377,6 +377,8 @@ int j2sobject_deserialize_cjson(struct j2sobject *self, cJSON *jobj) {
 
         switch (ele->type) {
             case cJSON_Number: {
+                printf("%s(%d): number:%f\n", __FUNCTION__, __LINE__, cJSON_GetNumberValue(ele));
+                printf("%s(%d): number:%ld\n", __FUNCTION__, __LINE__, (long)ele->valuedouble/*cJSON_GetNumberValue(ele)*/);
                 if (pt->type == J2S_INT) {
                     int *ptr = (int *)((char *)self + pt->offset);
                     *ptr = (int)cJSON_GetNumberValue(ele);
@@ -543,10 +545,33 @@ int j2sobject_deserialize_file(struct j2sobject *self, const char *path) {
     return ret;
 }
 
+int j2sobject_deserialize_target(struct j2sobject *self, const char *jstr, const char *target) {
+    int ret = -1;
+    cJSON *root = NULL, *object = NULL;
+    if (!jstr || !self) {
+        return -1;
+    }
+
+    root = object = cJSON_Parse(jstr);
+    if (!root) {
+        return -1;
+    }
+
+    if (target != NULL) {
+        object = cJSON_GetObjectItem(root, target);
+    }
+
+    ret = j2sobject_deserialize_cjson(self, object);
+
+    cJSON_Delete(root);
+
+    return ret;
+}
 int j2sobject_deserialize_target_file(struct j2sobject *self, const char *path, const char *target) {
     int ret = -1;
     size_t len = 0;
     char *data = NULL;
+    cJSON *root = NULL, *object = NULL;
     if (!path || !self) {
         return -1;
     }
@@ -556,7 +581,7 @@ int j2sobject_deserialize_target_file(struct j2sobject *self, const char *path, 
         printf("can not read file:%s\n", path);
         return -1;
     }
-    cJSON *root = cJSON_ParseWithLength(data, len);
+    root = object = cJSON_ParseWithLength(data, len);
     if (!root) {
         printf("can not read file:%s, data:%s\n", path, data);
 
@@ -564,7 +589,7 @@ int j2sobject_deserialize_target_file(struct j2sobject *self, const char *path, 
         free(data);
         return -1;
     }
-    cJSON *object = root;
+
     if (target != NULL) {
         object = cJSON_GetObjectItem(root, target);
     }

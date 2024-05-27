@@ -6,9 +6,8 @@
 #include "j2sobject_cloud.h"
 
 
+int tcloud_drive_init(void);
+int tcloud_drive_destroy(void);
 
-int tcloud_drive_opendir(int32_t id, struct j2scloud_folder_resp **dir) ;
-
-int tcloud_drive_readdir(int32_t id, struct j2scloud_folder_resp * dir);
+int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp * dir);
 #endif
-
