@@ -22,9 +22,31 @@ int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
 
     return 0;
 }
+
+
+int tcloud_buffer_prealloc(struct tcloud_buffer *buf, void* data, size_t size) {
+     if (!buf)
+        return -1;
+
+    // assert(!buf->data);
+
+    // assert(buf->size > 0);
+    buf->offset = 0;
+    buf->size = size;
+    buf->data = data;
+    buf->preallocated = 1;
+
+    return 0;
+}
+
 int tcloud_buffer_realloc(struct tcloud_buffer *buf, size_t size) {
     if (!buf /*|| !buf->data*/)
         return -1;
+    
+    if (buf->preallocated) {
+        // not support!
+        return -1;
+    }
 
     buf->data = (char *)realloc(buf->data, size);
     if (!buf->data) {
@@ -39,6 +61,9 @@ int tcloud_buffer_free(struct tcloud_buffer *buf) {
     if (!buf)
         return -1;
     buf->offset = 0;
+    if (buf->preallocated != 0) {
+        return 0;
+    }
     memset((void *)buf->data, 0, buf->size);
 
     free(buf->data);

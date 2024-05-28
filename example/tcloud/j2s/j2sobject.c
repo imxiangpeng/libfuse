@@ -18,9 +18,6 @@
 //                do not output null elements
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
-#include <json-c/arraylist.h>
-#include <json-c/json_object.h>
-#include <json-c/json_types.h>
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -855,9 +852,7 @@ int j2sobject_deserialize_json(struct j2sobject *self, void *jobj) {
         }
 
         switch (json_object_get_type(val)) {
-            printf("type :%d\n", json_object_get_type(val));
             case json_type_int: {
-                printf("%s(%d): number:%d\n", __FUNCTION__, __LINE__, json_object_get_int(val));
                 if (pt->type == J2S_INT) {
                     int *ptr = (int *)((char *)self + pt->offset);
                     *ptr = json_object_get_int(val);
@@ -1012,7 +1007,7 @@ int j2sobject_deserialize_file(struct j2sobject *self, const char *path) {
         return -1;
     }
     
-	json_tokener *tok = json_tokener_new_ex(-1);
+	json_tokener *tok = json_tokener_new();
 	root = json_tokener_parse_ex(tok, data, len); 
 	json_tokener_free(tok);
     if (!root) {
@@ -1042,22 +1037,14 @@ int j2sobject_deserialize_target(struct j2sobject *self, const char *jstr, const
         return -1;
     }
     
-    printf("%s(%d): ...............\n", __FUNCTION__, __LINE__);
-
     if (target != NULL) {
         if (!json_object_object_get_ex(root, target, &object)){
-    printf("%s(%d): ........can not found target:%s.......\n", __FUNCTION__, __LINE__, target);
-
             json_object_put(root);
             return -1;
         }
     }
 
-    printf("%s(%d): .....try deserialize..........\n", __FUNCTION__, __LINE__);
-
     ret = j2sobject_deserialize_json(self, object);
-
-    printf("%s(%d): ......out.........\n", __FUNCTION__, __LINE__);
 
     json_object_put(root);
 
