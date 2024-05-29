@@ -10,7 +10,6 @@ typedef struct j2scloud_folder {
     char *name;
     char *createDate;
     char *lastOpTime;
-    // double rev; // int64_t
     char *rev; // int64_t
     int64_t parentId; // int64_t
 

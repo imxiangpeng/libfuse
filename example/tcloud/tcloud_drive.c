@@ -30,6 +30,7 @@
 #include "tcloud_buffer.h"
 
 #include "j2sobject_cloud.h"
+#include "tcloud_drive.h"
 #include "xxtea.h"
 #include "uthash.h"
 
@@ -49,7 +50,8 @@
 #define CHANNEL_ID "web_cloud.189.cn"
 
 #define AUTH_URL "https://open.e.189.cn"
-#define API_URL "https://api.cloud.189.cn"
+// #define API_URL "https://api.cloud.189.cn"
+#define API_URL "http://api.cloud.189.cn"
 #define UPLOAD_URL "https://upload.cloud.189.cn"
 
 struct tcloud_drive_fd {
@@ -62,12 +64,113 @@ struct tcloud_drive_fd {
     pthread_mutex_t mutex;
 };
 
+static long long time_ms() {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) == -1) {
+        perror("clock_gettime");
+        return -1;
+    }
+    return (ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
+}
+static char *request_url_path(const char *url) {
+    const char *start = strstr(url, "://");
+    if (!start) {
+        return NULL;
+    }
+    start += 3;  // skip "://"
+    const char *path_start = strchr(start, '/');
+    if (!path_start) {
+        path_start = "/";
+    }
+
+    const char *query_start = strchr(path_start, '?');
+    size_t path_len = query_start ? (size_t)(query_start - path_start) : strlen(path_start);
+
+    char *path = (char *)malloc(path_len + 1);
+    if (!path) {
+        return NULL;
+    }
+    strncpy(path, path_start, path_len);
+    path[path_len] = '\0';
+    return path;
+}
+
+int http_gmt_date(char *buffer, size_t length) {
+    time_t rawtime;
+    struct tm *timeinfo;
+
+    if (buffer == NULL) {
+        return -1;
+    }
+
+    time(&rawtime);
+    timeinfo = gmtime(&rawtime);
+
+    if (strftime(buffer, length, "%a, %d %b %Y %H:%M:%S GMT", timeinfo) == 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+void to_uppercase(char *str) {
+    while (*str) {
+        *str = toupper((unsigned char)*str);
+        str++;
+    }
+}
+char *signatureOfHmac(const char *sessionSecret, const char *sessionKey, const char *operate, const char *fullUrl, const char *dateOfGmt, const char *param) {
+    char *urlPath = request_url_path(fullUrl);
+    if (!urlPath) {
+        return NULL;
+    }
+
+    printf("url %s -> %s\n", fullUrl, urlPath);
+    int data_len = strlen(sessionKey) + strlen(operate) + strlen(urlPath) + strlen(dateOfGmt) + 50;
+    if (param && strlen(param) > 0) {
+        data_len += strlen(param) + 9;  // +9 for "&params="
+    }
+
+    char *data = (char *)malloc(data_len);
+    if (!data) {
+        free(urlPath);
+        return NULL;
+    }
+
+    if (param && strlen(param) > 0) {
+        snprintf(data, data_len, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s&params=%s", sessionKey, operate, urlPath, dateOfGmt, param);
+    } else {
+        snprintf(data, data_len, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", sessionKey, operate, urlPath, dateOfGmt);
+    }
+
+    printf("data:%s\n", data);
+    free(urlPath);
+
+    unsigned char *result;
+    unsigned int len = SHA_DIGEST_LENGTH;
+
+    result = HMAC(EVP_sha1(), sessionSecret, strlen(sessionSecret), (unsigned char *)data, strlen(data), NULL, NULL);
+    free(data);
+
+    char *hex_result = (char *)malloc(len * 2 + 1);
+    if (!hex_result) {
+        return NULL;
+    }
+
+    for (unsigned int i = 0; i < len; i++) {
+        sprintf(hex_result + i * 2, "%02X", result[i]);
+    }
+    hex_result[len * 2] = '\0';
+
+    to_uppercase(hex_result);
+    return hex_result;
+}
 static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
                             void *userdata) {
     struct tcloud_buffer *buf = (struct tcloud_buffer *)userdata;
     size_t total = size * nmemb;
     if (!ptr || !userdata)
-        return -1;
+        return total;  // drop all data
 
     tcloud_buffer_append(buf, ptr, total);
     return total;
@@ -132,9 +235,11 @@ int http_post_j2sobject_result(const char *url, struct curl_slist *headers, cons
 
     return ret;
 }
-int driver_http_get(const char *url, struct curl_slist *headers, struct tcloud_buffer *result) {
+
+static int _http_get(const char *url, struct curl_slist *headers, struct tcloud_buffer *result) {
     CURL *curl;
     CURLcode res;
+    long response_code = 0;
 
     curl = curl_easy_init();
     if (!curl) {
@@ -148,7 +253,7 @@ int driver_http_get(const char *url, struct curl_slist *headers, struct tcloud_b
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, result);
 
     // follow redirect
-    // curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
 
     res = curl_easy_perform(curl);
 
@@ -157,6 +262,8 @@ int driver_http_get(const char *url, struct curl_slist *headers, struct tcloud_b
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         return -1;
     }
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+    printf("code:%d, response code:%ld\n", CURLE_OK, response_code);
     printf("%lu bytes retrieved\n", (unsigned long)result->offset);
     printf("Response: %s\n", result->data);
 
@@ -165,144 +272,73 @@ int driver_http_get(const char *url, struct curl_slist *headers, struct tcloud_b
     return 0;
 }
 
-static int http_get(CURLU *url, /*struct curl_slist *data, struct curl_slist *header, */ struct tcloud_buffer *mem) {
-    long response_code = 0;
-    CURL *curl = NULL;
+static int _tcloud_drive_http_get(const char *url, const char *payload, struct tcloud_buffer *buf) {
+    char *request_url = NULL;
+    struct curl_slist *headers = NULL;
+    char tmp[512] = {0};
 
-    if (!url) return -1;
+    const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
+    const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
+    uuid_t uuid;
+    char request_id[UUID_STR_LEN + 20] = {0};
 
-    curl = curl_easy_init();
-    if (!curl) return -1;
+    // X-Request-ID:
+    uuid_generate(uuid);
+    int pos = snprintf(request_id, sizeof(request_id), "%s", "X-Request-ID: ");
+    uuid_unparse(uuid, request_id + pos);
+    printf("Generated UUID: %s\n", request_id + pos);
+    headers = curl_slist_append(headers, request_id);
 
-    char *uri = NULL;
-    curl_url_get(url, CURLUPART_URL, &uri, 0);
-    printf("request: %s\n", uri);
-    curl_easy_setopt(curl, CURLOPT_CURLU, url);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, 60L);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, mem);
+    char date[64] = {0};
+    // Date:
+    http_gmt_date(date, sizeof(date));
+    snprintf(tmp, sizeof(tmp), "Date: %s", date);
+    headers = curl_slist_append(headers, tmp);
 
-    // follow redirect
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+    // Accept:
+    headers = curl_slist_append(headers, "Accept: application/json;charset=UTF-8");
+    // Referer:
+    headers = curl_slist_append(headers, "Referer: https://cloud.189.cn");
 
-    CURLcode code = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-    curl_easy_cleanup(curl);
-    printf("code:%d, response code:%ld\n", CURLE_OK, response_code);
+    // Sessionkey:
+    snprintf(tmp, sizeof(tmp), "Sessionkey: %s", session_key);
+    headers = curl_slist_append(headers, tmp);
 
-    if (CURLE_OK != code) {
-        printf("request failed ... %d:%s\n", code, curl_easy_strerror(code));
-        return -1;
-    }
-
-    if (response_code != 200) return -1;
-
-    return 0;
-}
-
-static long long time_ms() {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) == -1) {
-        perror("clock_gettime");
-        return -1;
-    }
-    return (ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
-}
-char *extract_url_path(const char *url) {
-    const char *start = strstr(url, "://");
-    if (!start) {
-        return NULL;
-    }
-    start += 3;  // 跳过 "://"
-    const char *path_start = strchr(start, '/');
-    if (!path_start) {
-        path_start = "/";
-    }
-
-    const char *query_start = strchr(path_start, '?');
-    size_t path_len = query_start ? (size_t)(query_start - path_start) : strlen(path_start);
-
-    char *path = (char *)malloc(path_len + 1);
-    if (!path) {
-        return NULL;
-    }
-    strncpy(path, path_start, path_len);
-    path[path_len] = '\0';
-    return path;
-}
-
-int http_gmt_date(char *buffer, size_t length) {
-    time_t rawtime;
-    struct tm *timeinfo;
-
-    if (buffer == NULL) {
-        return -1;
-    }
-
-    time(&rawtime);
-    timeinfo = gmtime(&rawtime);  // 获取UTC时间
-
-    if (strftime(buffer, length, "%a, %d %b %Y %H:%M:%S GMT", timeinfo) == 0) {
-        return -1;
-    }
-
-    return 0;
-}
-
-void to_uppercase(char *str) {
-    while (*str) {
-        *str = toupper((unsigned char)*str);
-        str++;
-    }
-}
-char *signatureOfHmac(const char *sessionSecret, const char *sessionKey, const char *operate, const char *fullUrl, const char *dateOfGmt, const char *param) {
-    char *urlPath = extract_url_path(fullUrl);
-    if (!urlPath) {
-        return NULL;
-    }
-
-    printf("url %s -> %s\n", fullUrl, urlPath);
-    int data_len = strlen(sessionKey) + strlen(operate) + strlen(urlPath) + strlen(dateOfGmt) + 50;
-    if (param && strlen(param) > 0) {
-        data_len += strlen(param) + 9;  // +9 for "&params="
-    }
-
-    char *data = (char *)malloc(data_len);
-    if (!data) {
-        free(urlPath);
-        return NULL;
-    }
-
-    if (param && strlen(param) > 0) {
-        snprintf(data, data_len, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s&params=%s", sessionKey, operate, urlPath, dateOfGmt, param);
+    if (!payload) {
+        asprintf(&request_url, "%s?clientType=%s&version=%s&channelId=%s&rand=%d_%d", url, PC, VERSION, CHANNEL_ID, rand(), rand());
     } else {
-        snprintf(data, data_len, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", sessionKey, operate, urlPath, dateOfGmt);
+        asprintf(&request_url, "%s?%s&clientType=%s&version=%s&channelId=%s&rand=%d_%d", url, payload, PC, VERSION, CHANNEL_ID, rand(), rand());
     }
 
-    printf("data:%s\n", data);
-    free(urlPath);
+    char *signature = signatureOfHmac(secret, session_key, "GET", url, date, NULL);
+    printf("signature:%s\n", signature);
 
-    unsigned char *result;
-    unsigned int len = SHA_DIGEST_LENGTH;
+    int offset = strlen("Signature: ");
+    int val_len = strlen(signature);
 
-    result = HMAC(EVP_sha1(), sessionSecret, strlen(sessionSecret), (unsigned char *)data, strlen(data), NULL, NULL);
-    free(data);
-
-    char *hex_result = (char *)malloc(len * 2 + 1);
-    if (!hex_result) {
-        return NULL;
+    void *ptr = realloc(signature, val_len + offset + 1);
+    if (!ptr) {
+        free(signature);
+        free(request_url);
+        return -1;
     }
+    signature = ptr;
+    *(signature + val_len + offset) = '\0';
+    memcpy(signature + offset, signature, strlen(signature));
+    memcpy(signature, "Signature: ", offset);
+    headers = curl_slist_append(headers, signature);
 
-    for (unsigned int i = 0; i < len; i++) {
-        sprintf(hex_result + i * 2, "%02X", result[i]);
-    }
-    hex_result[len * 2] = '\0';
+    int ret = _http_get(url, headers, buf);
 
-    to_uppercase(hex_result);
-    return hex_result;
+    HR_LOGD("%s(%d): code:%d result:%s\n", __FUNCTION__, __LINE__, ret, buf->data);
+
+    curl_slist_free_all(headers);
+
+    free(signature);
+    free(request_url);
+    return ret;
 }
+
 int tcloud_drive_init(void) {
     curl_global_init(CURL_GLOBAL_ALL);
     return 0;
@@ -312,11 +348,90 @@ int tcloud_drive_destroy(void) {
     curl_global_cleanup();
     return 0;
 }
-static int tcloud_drive_getattr(const char *path, struct stat *stbuf,
-                                struct fuse_file_info *fi) {
-    printf("%s(%d): path:%s fi:%p\n", __FUNCTION__, __LINE__, path, fi);
 
-    return -ENOENT;
+int tcloud_drive_storage_statfs(struct statvfs *st) {
+    struct json_object *root = NULL, *capacity = NULL, *available = NULL, *res_code = NULL;
+    struct tcloud_buffer b;
+    tcloud_buffer_alloc(&b, 512);
+    int ret = _tcloud_drive_http_get(API_URL "/getUserInfo.action", NULL, &b);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+    printf("data:%s\n", b.data);
+    root = json_tokener_parse(b.data);
+    tcloud_buffer_free(&b);
+    if (!root) {
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "res_code", &res_code);
+    if (!res_code || json_object_get_int(res_code) != 0) {
+        json_object_put(root);
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "capacity", &capacity);
+    json_object_object_get_ex(root, "available", &available);
+    printf("%s(%d): .capability:%ld, available:%ld...\n", __FUNCTION__, __LINE__, json_object_get_int64(capacity), json_object_get_int64(available));
+    st->f_namemax = 255;
+    st->f_bsize = 4096;
+    st->f_blocks = json_object_get_int64(capacity) / st->f_bsize;
+    st->f_bfree = json_object_get_int64(available) / st->f_bsize;
+    st->f_bavail = json_object_get_int64(available) / st->f_bsize;
+    printf("%s(%d): .capability:%ld, available:%ld-%ld....\n", __FUNCTION__, __LINE__, st->f_blocks * 4096, st->f_bfree, st->f_bavail);
+    printf("%s(%d): .capability:%ld, available:%ld-%ld....\n", __FUNCTION__, __LINE__, st->f_blocks * 4096, st->f_bfree, st->f_bavail);
+    json_object_put(root);
+    root = NULL;
+}
+
+// id: file or folder id
+// type: 0 --> folder
+//       1 --> file
+// we only used to get root folder information
+// other folder/file information we have got in listFile
+int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct timespec *ctime) {
+    printf("%s(%d): id:%ld, type:%d\n", __FUNCTION__, __LINE__, id, type);
+
+    struct json_object *root = NULL, *res_code = NULL;
+    struct tcloud_buffer b;
+    char *url = NULL;
+    asprintf(&url, API_URL
+             "%s"
+             "?folderId=%ld",
+             type == 0 ? "/getFolderInfo.action" : "/getFileInfo.action",
+             id);
+
+    if (!url) return -1;
+
+    tcloud_buffer_alloc(&b, 512);
+    int ret = _tcloud_drive_http_get(url, NULL, &b);
+    free(url);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+
+    HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
+    root = json_tokener_parse(b.data);
+    tcloud_buffer_free(&b);
+    if (!root) {
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "res_code", &res_code);
+    if (!res_code || json_object_get_int(res_code) != 0) {
+        json_object_put(root);
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+
+    ctime->tv_sec = json_object_get_int64(json_object_object_get(root, "createTime"));
+    atime->tv_sec = json_object_get_int64(json_object_object_get(root, "lastOpTime"));
+
+    json_object_put(root);
+
+    return 0;
 }
 
 static int tcloud_drive_access(const char *path, int mask) {
@@ -324,72 +439,19 @@ static int tcloud_drive_access(const char *path, int mask) {
     return 0;
 }
 
-#if 0
-int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp * dir) {
-  char *path = NULL;
-
-
-  // asprintf(&path, "/workspace/workspace/libfuse/libfuse/build/filelists-%d.json", id);
-  asprintf(&path, "/home/alex/workspace/workspace/libfuse/libfuse/build/filelists-%d.json", id);
-  
-  printf("folder :%d --> %s\n", id, path);
-  
-  
-    int ret = j2sobject_deserialize_target_file(        J2SOBJECT(dir),        path,        "fileListAO");
-  
-  free(path);
-
-
-  return ret;
-}
-#else
-
 // Referer: https://cloud.189.cn
 // Sessionkey: 2f66d7f1-af6a-4a7b-a3b9-e81640c0b44d
 // Signature: 3D40EFF921EB4110B73386D195DDE7B3905646E3
 // X-Request-Id: 7442917f-ffb1-472f-87ec-97e05ae1c7f9
 // id: folder id
-int tcloud_drive_readdir(uint64_t id, struct j2scloud_folder_resp *dir) {
-    uuid_t uuid;
-    char request_id[UUID_STR_LEN + 20] = {0};
+int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
+    struct tcloud_buffer b;
     char *url = NULL;
-    // const char* url = "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action";
-    struct curl_slist *headers = NULL;
-    const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
-    const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
-
-    char tmp[512] = {0};
-
-    headers = curl_slist_append(headers, "Accept: application/json;charset=UTF-8");
-    headers = curl_slist_append(headers, "Referer: https://cloud.189.cn");
-    snprintf(tmp, sizeof(tmp), "Sessionkey: %s", session_key);
-    headers = curl_slist_append(headers, tmp);
-
-    // 生成UUID
-    uuid_generate(uuid);
-
-    int ret = snprintf(request_id, sizeof(request_id), "%s", "X-Request-ID: ");
-    // 将UUID转换为字符串形式
-    uuid_unparse(uuid, request_id + ret);
-
-    printf("Generated UUID: %s\n", request_id + ret);
-
-    headers = curl_slist_append(headers, request_id);
-
-    // generate query payload
-
-    long folder_id = id;
-    printf("folder :%ld vs id:%ld\n", folder_id, id);
-    const int page_size = 100;
     int page_num = 1;
-
-    //    CURLU *url = curl_url();
-    // curl_url_set(url, CURLUPART_URL, "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action");
-    // snprintf(tmp, sizeof(tmp))
-    // "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action?folderId=%d"
-    //
+    int page_size = 100;
     asprintf(&url,
-             "https://api.cloud.189.cn/listFiles.action"
+             API_URL
+             "/listFiles.action"
              "?folderId=%ld"
              "&fileType=0"
              "&mediaType=0"
@@ -398,47 +460,25 @@ int tcloud_drive_readdir(uint64_t id, struct j2scloud_folder_resp *dir) {
              "&orderBy=filename"
              "&descending=true"
              "&pageNum=%d"
-             "&pageSize=%d"
-             "&clientType=%s&version=%s&channelId=%s&rand=%d_%d",
-             folder_id, page_num, page_size,
-             PC, VERSION, CHANNEL_ID, rand(), rand());
+             "&pageSize=%d",
+             id, page_num, page_size);
 
-    char date[64] = {0};
-    http_gmt_date(date, sizeof(date));
-    printf("date:%s\n", date);
+    if (!url) return -1;
 
-    snprintf(tmp, sizeof(tmp), "Date: %s", date);
-    headers = curl_slist_append(headers, tmp);
-
-    char *signature = signatureOfHmac(secret, session_key, "GET", url, date, NULL);
-
-    printf("signature:%s\n", signature);
-
-    int offset = strlen("Signature: ");
-
-    signature = realloc(signature, strlen(signature) + offset);
-
-    memcpy(signature + offset, signature, strlen(signature));
-    memcpy(signature, "Signature: ", offset);
-    headers = curl_slist_append(headers, signature);
-
-    struct tcloud_buffer buffer;
-
-    tcloud_buffer_alloc(&buffer, 2048);
-
-    printf("%s(%d): request:%s\n", __FUNCTION__, __LINE__, url);
-    ret = driver_http_get(url, headers, &buffer);
-
-    printf("file list: %s\n", buffer.data);
-    ret = j2sobject_deserialize_target(dir, buffer.data, "fileListAO");
-    printf("ret:%d\n", ret);
-
-    tcloud_buffer_free(&buffer);
-    curl_slist_free_all(headers);
+    tcloud_buffer_alloc(&b, 2048);
+    int ret = _tcloud_drive_http_get(url, NULL, &b);
     free(url);
-    return 0;
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+    printf("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
+    ret = j2sobject_deserialize_target(dir, b.data, "fileListAO");
+    HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
+    tcloud_buffer_free(&b);
+
+    return ret;
 }
-#endif
 
 static int tcloud_drive_releasedir(const char *path,
                                    struct fuse_file_info *fi) {
@@ -446,9 +486,51 @@ static int tcloud_drive_releasedir(const char *path,
     return 0;
 }
 
-static int tcloud_drive_mkdir(const char *path, mode_t mode) {
+int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-    return 0;
+
+    struct json_object *root = NULL, *res_code = NULL;
+    struct tcloud_buffer b;
+    char *url = NULL;
+  int64_t id = -1;
+
+    if (!name) return -1;
+
+    asprintf(&url, API_URL
+             "/createFolder.action"
+             "?parentFolderId=%ld"
+             "&folderName=%s",
+             parent, name);
+
+    if (!url) return -1;
+
+    tcloud_buffer_alloc(&b, 512);
+    int ret = _tcloud_drive_http_get(url, NULL, &b);
+    free(url);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+
+    HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
+    root = json_tokener_parse(b.data);
+    tcloud_buffer_free(&b);
+    if (!root) {
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "res_code", &res_code);
+    if (!res_code || json_object_get_int(res_code) != 0) {
+        json_object_put(root);
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+
+    id = json_object_get_int64(json_object_object_get(root, "id"));
+
+    json_object_put(root);
+
+    return id;
 }
 
 static int tcloud_drive_rmdir(const char *path) {
@@ -474,7 +556,7 @@ static int tcloud_drive_utimens(const char *path, const struct timespec tv[2],
 }
 
 // return real download url
-void *tcloud_drive_open(int64_t id) {
+struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
     struct tcloud_drive_fd *fd = NULL;
     int ret = -1;
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
@@ -548,7 +630,7 @@ void *tcloud_drive_open(int64_t id) {
     tcloud_buffer_alloc(&buffer, 2048);
 
     printf("%s(%d): request:%s\n", __FUNCTION__, __LINE__, url);
-    ret = driver_http_get(url, headers, &buffer);
+    ret = _http_get(url, headers, &buffer);
 
     printf("file list: %s\n", buffer.data);
     printf("ret:%d\n", ret);
@@ -597,8 +679,8 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
 
     // pthread_mutex_lock(&fd->mutex);
-            curl = curl_easy_init();
-            curl_easy_setopt(curl, CURLOPT_URL, fd->url);
+    curl = curl_easy_init();
+    curl_easy_setopt(curl, CURLOPT_URL, fd->url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &b);
     curl_easy_setopt(curl, CURLOPT_RANGE, range);
@@ -610,7 +692,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     // pthread_mutex_unlock(&fd->mutex);
     if (res != CURLE_OK) {
-    curl_easy_cleanup(curl);
+        curl_easy_cleanup(curl);
         HR_LOGD("%s(%d): .....do perform failed .......... curl:%p...\n", __FUNCTION__, __LINE__, curl);
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         return -EIO;

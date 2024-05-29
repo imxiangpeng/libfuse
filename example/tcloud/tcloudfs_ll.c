@@ -60,6 +60,10 @@ struct tcloudfs_node {
 struct tcloudfs_priv {
     pthread_mutex_t mutex;
 
+    struct {
+        time_t last_time;
+        struct statvfs st;
+    } st;
     struct tcloudfs_node *hash_node_lists;  // verify node is valid ...
     // uint32_t default_root_id;
     /// struct tcloudfs_node root;
@@ -311,7 +315,9 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
 }
 static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     struct tcloudfs_priv *priv = (struct tcloudfs_data *)userdata;
-    printf("%s(%d): .........priv:%p\n", __FUNCTION__, __LINE__, priv);
+    printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
+    conn->max_read = 1024 *1024 *1024;
+    printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
 }
 
 static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
@@ -351,7 +357,9 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.entry_timeout = 1.0;
 
     // only update directory when readdir for better performance
-    // tcloudfs_update_directory(node);
+    if (hr_list_empty(&node->childs)) {
+        tcloudfs_update_directory(node);
+    }
 
     hr_list_for_each_entry(p, &node->childs, entry) {
         printf("%s(%d): node:%p,  child: id:%ld, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, S_ISDIR(p->mode));
@@ -412,6 +420,8 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     if (!is_valid_node(node)) {
         return;
     }
+
+    HR_LOGD("%s(%d): forge %p, %s, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, nlookup);
 #if 0
     printf("id: %d, name:%s, is dir:%d\n", node->cloud_id, node->name, S_ISDIR(node->mode));
     if (S_ISDIR(node->mode)) {
@@ -552,7 +562,7 @@ static void tcloudfs_opendir(fuse_req_t req, fuse_ino_t ino,
     //       fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -586,7 +596,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     time_t now = 0;
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -677,7 +687,7 @@ static void tcloudfs_releasedir(fuse_req_t req, fuse_ino_t ino,
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -741,8 +751,13 @@ static void tcloudfs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     }
 
     struct fuse_entry_param e;
-
-    struct tcloudfs_node *n = allocate_node(-11, name, node);
+    int64_t id = tcloud_drive_mkdir(node->cloud_id, name);
+    if (id < 0) {
+        // it's invalid id
+        printf("can not create dir\n");
+        fuse_reply_err(req, -EIO);
+    }
+    struct tcloudfs_node *n = allocate_node(id, name, node);
     n->mode = S_IFDIR | mode;
 
     e.ino = (fuse_ino_t)n;
@@ -799,7 +814,7 @@ static void tcloudfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -840,7 +855,7 @@ static void tcloudfs_release(fuse_req_t req, fuse_ino_t ino,
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -873,7 +888,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     //       fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -958,7 +973,7 @@ void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
-    if (ino == 1) {
+    if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
         // we can directly use parent ino, because it's node pointer
@@ -1009,17 +1024,43 @@ static void tcloudfs_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence
 }
 
 static void tcloudfs_statfs(fuse_req_t req, fuse_ino_t ino) {
-    struct statvfs result;
+    struct statvfs st;
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node = NULL;
+    // if (ino == FUSE_ROOT_ID) {
+    node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    // }
+#if 0    
+     else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
+    }
+#endif
+    if (!is_valid_node(node)) {
+        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+        return;
+    }
 
-    result.f_namemax = 255;
-    result.f_bsize = 4096;
-    result.f_blocks = 1024 * 1024 * 1024;
-    result.f_bfree = 1024 * 1024 * 5;
-    result.f_bavail = 1024 * 1024 * 5;
+    HR_LOGD("%s(%d): node:%p -> %s\n", __FUNCTION__, __LINE__, node, node->name);
 
-    fuse_reply_statfs(req, &result);
+    memset((void *)&st, 0, sizeof(st));
+    st.f_namemax = 255;
+    st.f_bsize = 4096;
+    time_t now = time(NULL);
+    if (now < priv->st.last_time + 60) {
+        if (0 == tcloud_drive_storage_statfs(&priv->st.st)) {
+            priv->st.last_time = now;
+        }
+    }
+
+    fuse_reply_statfs(req, &st);
 }
 static void tcloudfs_fallocate(fuse_req_t req, fuse_ino_t ino, int mode, off_t offset,
                                off_t length, struct fuse_file_info *fi) {
@@ -1085,6 +1126,8 @@ int main(int argc, char **argv) {
     struct tcloudfs_node *root = allocate_node(-11 /*FUSE_ROOT_ID*/, "/", NULL);
     root->mode = S_IFDIR | TCLOUDFS_DEFAULT_MODE;
 
+    tcloud_drive_getattr(root->cloud_id, 0 /*folder*/, &root->atime, &root->ctime);
+    root->mtime = root->atime;
     hr_list_add_tail(&root->entry, &_priv.head);
 
     if (fuse_parse_cmdline(&args, &opts) != 0)

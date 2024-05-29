@@ -1,0 +1,26 @@
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+
+#define MAX_BUF 1024 * 1024 /**1024*/
+
+int main(int argc, char** argv) {
+    char * b = malloc(MAX_BUF);
+    printf("argv:%s\n", argv[1]);
+    int fd = open(argv[1], O_CREAT| O_RDWR, 0755);
+    if (fd < 0) {
+        printf("can not open:%s\n", argv[1]);
+        return -1;
+    }
+
+
+    size_t rs = read(fd, b, MAX_BUF);
+    printf("read size :%ld\n", rs);
+
+    free(b);
+
+    return 0;
+}

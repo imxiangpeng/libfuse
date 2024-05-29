@@ -1,5 +1,8 @@
 
 #include "tcloud_buffer.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 
 
@@ -12,6 +15,7 @@ int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
     // assert(!buf->data);
 
     // assert(buf->size > 0);
+    memset((void*)buf, 0, sizeof(*buf));
     buf->offset = 0;
     buf->size = size;
     buf->data = (char *)calloc(1, buf->size);
@@ -19,6 +23,7 @@ int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
         printf("%s(%d): can not allocate memory ...\n", __FUNCTION__, __LINE__);
         return -1;
     }
+    // buf->preallocated = 0;
 
     return 0;
 }
@@ -31,6 +36,7 @@ int tcloud_buffer_prealloc(struct tcloud_buffer *buf, void* data, size_t size) {
     // assert(!buf->data);
 
     // assert(buf->size > 0);
+    memset((void*)buf, 0, sizeof(*buf));
     buf->offset = 0;
     buf->size = size;
     buf->data = data;
