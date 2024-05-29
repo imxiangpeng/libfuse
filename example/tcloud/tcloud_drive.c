@@ -1,5 +1,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include <ctype.h>
 #endif
 
 #include <json-c/json.h>
@@ -54,6 +55,7 @@
 struct tcloud_drive_fd {
     int64_t id;  // cloud id
     CURL *curl;  // opened handle
+    char *url;
     // default libfuse using multi thread async mode
     // but we do not support (libcurl)
     // also you can use -s to disable libfuse multi thread feature
@@ -177,7 +179,6 @@ static int http_get(CURLU *url, /*struct curl_slist *data, struct curl_slist *he
     printf("request: %s\n", uri);
     curl_easy_setopt(curl, CURLOPT_CURLU, url);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    // curl_easy_setopt(curl, CURLOPT_CAINFO, "/data/cacert.pem");
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, 60L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
@@ -561,9 +562,10 @@ void *tcloud_drive_open(int64_t id) {
         if (json_object_object_get_ex(root, "fileDownloadUrl", &download_url)) {
             ret = 0;
             fd = (struct tcloud_drive_fd *)calloc(1, sizeof(struct tcloud_drive_fd));
+            fd->url = strdup(json_object_get_string(download_url));
             pthread_mutex_init(&fd->mutex, NULL);
-            fd->curl = curl_easy_init();
-            curl_easy_setopt(fd->curl, CURLOPT_URL, json_object_get_string(download_url));
+            // fd->curl = curl_easy_init();
+            // curl_easy_setopt(fd->curl, CURLOPT_URL, json_object_get_string(download_url));
         }
         printf("%s(%d): ..fd:%p..download url:%s....\n", __FUNCTION__, __LINE__, fd, json_object_get_string(download_url));
         json_object_put(root);
@@ -577,7 +579,7 @@ int tcloud_drive_release(struct tcloud_drive_fd *fd) {
     if (!fd) return -1;
     printf("%s(%d): .....release :%p...\n", __FUNCTION__, __LINE__, fd);
     pthread_mutex_destroy(&fd->mutex);
-    curl_easy_cleanup(fd->curl);
+    // curl_easy_cleanup(fd->curl);
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     return 0;
 }
@@ -594,7 +596,9 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     char range[64] = {0};
     snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
 
-    pthread_mutex_lock(&fd->mutex);
+    // pthread_mutex_lock(&fd->mutex);
+            curl = curl_easy_init();
+            curl_easy_setopt(curl, CURLOPT_URL, fd->url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &b);
     curl_easy_setopt(curl, CURLOPT_RANGE, range);
@@ -604,12 +608,14 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     HR_LOGD("%s(%d): .....try do perform curl:%p...\n", __FUNCTION__, __LINE__, curl);
     int res = curl_easy_perform(curl);
 
-    pthread_mutex_unlock(&fd->mutex);
+    // pthread_mutex_unlock(&fd->mutex);
     if (res != CURLE_OK) {
+    curl_easy_cleanup(curl);
         HR_LOGD("%s(%d): .....do perform failed .......... curl:%p...\n", __FUNCTION__, __LINE__, curl);
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         return -EIO;
     }
+    curl_easy_cleanup(curl);
 
     memcpy(rbuf, b.data, b.offset);
     HR_LOGD("%s(%d): ........read:%ld\n", __FUNCTION__, __LINE__, b.offset);
