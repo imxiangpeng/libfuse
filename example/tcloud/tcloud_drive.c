@@ -277,8 +277,10 @@ static int _tcloud_drive_http_get(const char *url, const char *payload, struct t
     struct curl_slist *headers = NULL;
     char tmp[512] = {0};
 
-    const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
-    const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
+    const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
+    const char* session_key = "0bdc1b48-b764-478d-8984-c1faccd99a78";
+    // const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
+    //const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
     uuid_t uuid;
     char request_id[UUID_STR_LEN + 20] = {0};
 
