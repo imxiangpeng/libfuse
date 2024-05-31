@@ -95,10 +95,9 @@ static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
 
 static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, struct tcloud_buffer *h) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
-    CURLcode res;
+    CURLcode rc;
     CURL *curl = NULL;
     CURLU *url = NULL;
-    int rc = 0;
     long response_code = 0;
     char *redirect_url = NULL;
     struct tcloud_param *p;
@@ -116,7 +115,7 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
         curl_easy_setopt(curl, CURLOPT_URL, &priv->url);
     } else {
         url = curl_url();
-        rc = curl_url_set(url, CURLUPART_URL, priv->url, 0);
+        curl_url_set(url, CURLUPART_URL, priv->url, 0);
         hr_list_for_each_entry(p, &priv->query, entry) {
             curl_url_set(url, CURLUPART_QUERY, p->value, CURLU_APPENDQUERY);
         }
@@ -129,6 +128,9 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, b);
+    if (!b) {
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
+    }
     
     if (T_REQ_POST == priv->type) {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -147,7 +149,7 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
     // follow redirect
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
 
-    res = curl_easy_perform(curl);
+    rc = curl_easy_perform(curl);
 
     if (payload) {
         free(payload);
@@ -157,9 +159,9 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
         curl_url_cleanup(url);
     }
 
-    if (res != CURLE_OK) {
+    if (rc != CURLE_OK) {
         curl_easy_cleanup(curl);
-        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rc));
         return -1;
     }
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);

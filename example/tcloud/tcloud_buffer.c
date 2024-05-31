@@ -4,10 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-
-
-
 int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
     if (!buf)
         return -1;
@@ -15,7 +11,7 @@ int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
     // assert(!buf->data);
 
     // assert(buf->size > 0);
-    memset((void*)buf, 0, sizeof(*buf));
+    memset((void *)buf, 0, sizeof(*buf));
     buf->offset = 0;
     buf->size = size;
     buf->data = (char *)calloc(1, buf->size);
@@ -28,15 +24,14 @@ int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
     return 0;
 }
 
-
-int tcloud_buffer_prealloc(struct tcloud_buffer *buf, void* data, size_t size) {
-     if (!buf)
+int tcloud_buffer_prealloc(struct tcloud_buffer *buf, void *data, size_t size) {
+    if (!buf)
         return -1;
 
     // assert(!buf->data);
 
     // assert(buf->size > 0);
-    memset((void*)buf, 0, sizeof(*buf));
+    memset((void *)buf, 0, sizeof(*buf));
     buf->offset = 0;
     buf->size = size;
     buf->data = data;
@@ -46,19 +41,21 @@ int tcloud_buffer_prealloc(struct tcloud_buffer *buf, void* data, size_t size) {
 }
 
 int tcloud_buffer_realloc(struct tcloud_buffer *buf, size_t size) {
+    void *data = NULL;
     if (!buf /*|| !buf->data*/)
         return -1;
-    
+
     if (buf->preallocated) {
         // not support!
         return -1;
     }
 
-    buf->data = (char *)realloc(buf->data, size);
-    if (!buf->data) {
+    data = (char *)realloc(buf->data, size);
+    if (!data) {
         printf("%s(%d): can not reallocate memory ...\n", __FUNCTION__, __LINE__);
         return -1;
     }
+    buf->data = data;
     buf->size = size;
     memset((void *)((const char *)buf->data + buf->offset), 0, buf->size - buf->offset);
     return 0;
@@ -98,4 +95,9 @@ int tcloud_buffer_append(struct tcloud_buffer *buf, void *data, size_t size) {
     memcpy((void *)(buf->data + buf->offset), data, size);
     buf->offset += size;
     return 0;
+}
+
+int tcloud_buffer_append_string(struct tcloud_buffer *buf, const char *str) {
+    if (!buf || !str) return -1;
+    return tcloud_buffer_append(buf, (void *)str, strlen(str));
 }
