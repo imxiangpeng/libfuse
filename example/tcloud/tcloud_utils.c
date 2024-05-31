@@ -58,25 +58,10 @@ char *tcloud_utils_hmac_sha1(const char *key, const unsigned char *data, size_t 
     return result;
 }
 
-static int pkcs7_padding(struct tcloud_buffer *data, int block_size) {
-    int pad_len = block_size - (data->offset % block_size);
-    if (pad_len + data->offset > data->size) {
-        if (0 != tcloud_buffer_realloc(data, data->offset + pad_len)) {
-            return -1;
-        }
-    }
-
-    memset((void *)(data->data + data->offset), pad_len, pad_len);
-
-    data->offset += pad_len;
-
-    return 0;
-}
-
-int tcloud_utils_aes_ecb_buffer(unsigned char *key, struct tcloud_buffer *d, struct tcloud_buffer *r) {
+int tcloud_utils_aes_ecb_data(unsigned char *key, void *data, size_t length, struct tcloud_buffer *r) {
     int out_length = 0;
-    if (!d || !r) return -1;
-
+    if (!data || !r) return -1;
+    
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         return -1;
@@ -93,7 +78,7 @@ int tcloud_utils_aes_ecb_buffer(unsigned char *key, struct tcloud_buffer *d, str
         return -1;
     }
 
-    if (EVP_EncryptUpdate(ctx, (unsigned char *)r->data, &out_length, (const unsigned char *)d->data, d->offset) != 1) {
+    if (EVP_EncryptUpdate(ctx, (unsigned char *)r->data, &out_length, (const unsigned char *)data, length) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }

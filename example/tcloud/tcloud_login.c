@@ -228,7 +228,7 @@ int web_initmulti() {
         0x64, 0x32, 0x63, 0x39,  // 1681023801
         0x34, 0x35, 0x31, 0x65   // 875901285
     };
-    tcloud_utils_aes_ecb_buffer(key, &b, &r);
+    tcloud_utils_aes_ecb_data(key, b.data, b.offset, &r);
 
     printf("now r:%ld\n", r.offset);
     printf("now r:%s\n", r.data);
