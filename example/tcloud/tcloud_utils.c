@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <openssl/hmac.h>
+#include <openssl/pem.h>
 #include <openssl/sha.h>
 #include <openssl/aes.h>
 #include <string.h>
@@ -92,5 +93,99 @@ int tcloud_utils_aes_ecb_data(unsigned char *key, void *data, size_t length, str
     r->offset += out_length;
 
     EVP_CIPHER_CTX_free(ctx);
+    return 0;
+}
+
+
+void print_hex(const unsigned char* data, int len) {
+    for (int i = 0; i < len; ++i) {
+        printf("%02x", data[i]);
+    }
+    printf("\n");
+}
+
+int tcloud_utils_rsa_encrypt(const char* public_key, const char *data, size_t length, char *out, size_t *out_len) {
+
+    BIO *bio = BIO_new_mem_buf((void *)public_key, -1);
+    EVP_PKEY *evp_pkey = NULL;
+    EVP_PKEY_CTX *ctx = NULL;
+    size_t outlen = 0;
+
+    if (!bio) {
+        fprintf(stderr, "Error creating BIO\n");
+        return -1;
+    }
+
+
+    //RSA *rsa = PEM_read_bio_RSA_PUBKEY(bio, NULL, NULL, NULL);
+//rsa_encrypt(rsa, data);
+    printf("..............\n");
+    evp_pkey = PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+
+    if (!evp_pkey) {
+        fprintf(stderr, "Error loading public key\n");
+        return -1;
+    }
+#if 0
+    unsigned char sha_hash[SHA_DIGEST_LENGTH];
+    if (!SHA1(data, length, sha_hash)) {
+        handle_errors("SHA1");
+        // RSA_free(rsa);
+        return -1;
+    }
+    
+    // printf("hash:%s\n", sha_hash);
+#endif
+
+    ctx = EVP_PKEY_CTX_new(evp_pkey, NULL);
+    if (!ctx) {
+        fprintf(stderr, "Error creating EVP_PKEY_CTX\n");
+        EVP_PKEY_free(evp_pkey);
+        return -1;
+    }
+    if (EVP_PKEY_encrypt_init(ctx) <= 0) {
+        fprintf(stderr, "Error initializing encryption context\n");
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(evp_pkey);
+        return -1;
+    }
+
+    if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) <= 0) {
+        fprintf(stderr, "Error setting padding\n");
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(evp_pkey);
+        return -1;
+    }
+#if 1
+    if (EVP_PKEY_encrypt(ctx, NULL, &outlen, (const unsigned char *)data, length) <= 0) {
+        fprintf(stderr, "Error determining buffer length\n");
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(evp_pkey);
+        return -1;
+    }
+
+    if (outlen > *out_len) {
+        fprintf(stderr, "Error determining buffer length ..............\n");
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(evp_pkey);
+        return -1;
+    }
+    *out_len = outlen;
+#endif
+
+    memset((void *)out, 0, *out_len);
+    // *out_len = sizeof(sha_hash);
+    if (EVP_PKEY_encrypt(ctx, (unsigned char*)out, out_len, (const unsigned char *)data, length) <= 0) {
+        fprintf(stderr, "Error encrypting data\n");
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(evp_pkey);
+        return -1;
+    }
+    
+    print_hex(out, *out_len);
+
+    EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY_free(evp_pkey);
     return 0;
 }

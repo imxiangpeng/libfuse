@@ -77,7 +77,7 @@ int login(void) {
     // asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session, "GET", "/api/open/file/listFiles.action", date);
     // asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session, "GET", "/listFiles.action", date);
     asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session, "POST", "/listFiles.action", date);
-    signature = tcloud_utils_hmac_sha1(secret, signature_data, strlen(signature_data));
+    signature = tcloud_utils_hmac_sha1(secret, (const unsigned char *)signature_data, strlen(signature_data));
     printf("sig data:%s\n", signature_data);
     free(signature_data);
     printf("signature:%s\n", signature);
@@ -156,13 +156,34 @@ int create_file() {
 }
 #endif
 
+char *hex_to_string(const char *data, size_t len) {
+    int size = 0;
+    size_t offset = 0;
+    char *ptr = NULL;
+    if (!data) return NULL;
+
+    size = len * 2 + 1;
+
+    ptr = (unsigned char *)calloc(1, size);
+    if (!ptr) return NULL;
+
+    for (int i = 0; i < len; i++) {
+        int rc = snprintf(ptr + offset, size - offset, "%02x", data[i] & 0xFF);
+        offset += rc;
+    }
+
+    return ptr;
+}
 int web_initmulti() {
-    // const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
-    const char *session_key = "6c0a98e4-c9c1-4732-9fda-a4ca658ee510";
-    long date = 1717119472517;
-    const char *rsa_pkid = "99c53d1ec92e44308e453691db49e312";
-    const char *pub = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCZ/Ix82QPOfbc0VzDGqx8ez2SmKceu4ZznQcTXtyuXXWjOB6ehcP8rE0MKUponNmg4sRJIoUfrQcUgiItInCvA1wxgFSq843ojuvMef8udXWA1HH8D8dM87qilYe0TrLUeXgsZbaMJENMdVtxRtqDPykaAhe/DuCGujPlG/t1/BQIDAQAB";
-    const char *pre_aes_key = "0f1e9f36d2c9451eb4846";
+    const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
+    const char *session_key = "6c0a98e4-c9c1-4732-9fda-a4ca658ee510";//"6c0a98e4-c9c1-4732-9fda-a4ca658ee510";  //"0bdc1b48-b764-478d-8984-c1faccd99a78";//"6c0a98e4-c9c1-4732-9fda-a4ca658ee510";
+    time_t date = time(NULL) * 1000;//1717119472517;
+    const char *rsa_pkid = "36fac50fee614589897163504404b389";//"99c53d1ec92e44308e453691db49e312";
+//    const char *pub = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCZ/Ix82QPOfbc0VzDGqx8ez2SmKceu4ZznQcTXtyuXXWjOB6ehcP8rE0MKUponNmg4sRJIoUfrQcUgiItInCvA1wxgFSq843ojuvMef8udXWA1HH8D8dM87qilYe0TrLUeXgsZbaMJENMdVtxRtqDPykaAhe/DuCGujPlG/t1/BQIDAQAB\n-----END PUBLIC KEY-----";
+    const char *pub = "-----BEGIN PUBLIC KEY-----\n"
+    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCNqLC6L43z3Oy8jdxDke8vrpR/90/3UIq62iyJLyOn/APMXpRSwDyWbO8jdd+aaDVhG5ogpsz8iS6ppKEGRJupltd3RVBKATQJehgRiU4fZdH3wJWSqEuDDsvUMQpfdmJfS42CwLpd7fzrKLo/CDUSF8P2FD1V1CPEOcr0oK48iwIDAQAB"
+    "\n-----END PUBLIC KEY-----";
+    const char *pre_aes_key = "90aefc29c67042408e2";//"0f1e9f36d2c9451eb4846";
     struct tcloud_request *req;
     struct tcloud_buffer b;
     // req = tcloud_request_new(T_REQ_POST, listfiles_url)   ;
@@ -175,7 +196,8 @@ int web_initmulti() {
         "sliceMd5=928095757f98dc7cce23ce4527f332a5"       */
 
     tcloud_buffer_alloc(&b, 2048);
-    tcloud_buffer_append_string(&b, "parentFolderId=225281133668609798");
+    // tcloud_buffer_append_string(&b, "parentFolderId=225281133668609798");
+    tcloud_buffer_append_string(&b, "parentFolderId=325031136449786738");
     tcloud_buffer_append_string(&b, "&");
     tcloud_buffer_append_string(&b, "fileName=WIFI%E5%90%9E%E5%90%90%E9%87%8FFAQ.docx");
     tcloud_buffer_append_string(&b, "&");
@@ -216,7 +238,20 @@ int web_initmulti() {
 
     printf("%u %u %u %u\n", aes_bytes[0], aes_bytes[1], aes_bytes[2], aes_bytes[3]);
 
-    printf("cccc:%c%c\n", 85, 20);
+    char keys[16] = {0};
+
+    for (int i = 0; i < sizeof(aes_bytes); i++) {
+        keys[4 * i + 3] = (char)(aes_bytes[i] & 0xFF);
+        keys[4 * i + 2] = (char)((aes_bytes[i] >> 8) & 0xFF);
+        keys[4 * i + 1] = (char)((aes_bytes[i] >> 16) & 0xFF);
+        keys[4 * i + 0] = (char)((aes_bytes[i] >> 24) & 0xFF);
+    }
+    // char *c = (char *)&aes_bytes;
+
+    for (int i = 0; i < 16; i++) {
+        printf("0x%x\n", keys[i]);
+    }
+    printf("\n");
 
     // using aes bytes key to sign previous parameter
     struct tcloud_buffer r;
@@ -228,10 +263,7 @@ int web_initmulti() {
         0x64, 0x32, 0x63, 0x39,  // 1681023801
         0x34, 0x35, 0x31, 0x65   // 875901285
     };
-    tcloud_utils_aes_ecb_data(key, b.data, b.offset, &r);
-
-    printf("now r:%ld\n", r.offset);
-    printf("now r:%s\n", r.data);
+    tcloud_utils_aes_ecb_data(keys, b.data, b.offset, &r);
 
     // equal with web api?
     // result should be: a4802c5356c941bdfd10924f06807d08483617a7de852c24cd9d3e58434555758c33574ad14e444845c9de7045f928c5889d38ca3d5ea0485723f84f575f16f6f28e9e406c275e9b92f4c1e1989fd1f9f56d10b20a9a8044b66a496a2ef374020da6d3eebc492cd434a8efd0e402d042a51b53c93748893f450da4355165d8dc6fb1e1c3dd0c9b133160d78c59ee3396fd9275bd23c64b9a28172c8a200ddc6fbc91e7c223b331a839b1b4bf48c7e678ce3933d91d5f0988be85e58cc5c52b33c8f039fe3f687adb4bc0cfaf3d0ec97e
@@ -241,7 +273,63 @@ int web_initmulti() {
 
     printf("\n");
 
+    char *params = hex_to_string(r.data, r.offset);
     tcloud_buffer_free(&r);
+    printf("now ptr:%s\n", params);
+
+    // const char* initmultiupload = "https://upload.cloud.189.cn/person/initMultiUpload";
+    const char *initmultiupload = "http://upload.cloud.189.cn/person/initMultiUpload";
+    req = tcloud_request_new(T_REQ_GET, initmultiupload);
+    req->set_query(req, "params", params);
+    // free(params);
+
+    char uuid[UUID_STR_LEN] = {0};
+    char *signature = NULL;
+    // char date[256] = {0};
+
+    tcloud_utils_generate_uuid(uuid, sizeof(uuid));
+    // tcloud_utils_http_date_string(date, sizeof(date));
+
+    char *signature_data = NULL;
+    // asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session, "GET", "/api/open/file/listFiles.action", date);
+    // asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session, "GET", "/listFiles.action", date);
+    asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%ld&params=%s", session_key, "GET", "/person/initMultiUpload", date, params);
+    signature = tcloud_utils_hmac_sha1(pre_aes_key /* secret*/, (const unsigned char *)signature_data, strlen(signature_data));
+    printf("sig data:%s\n", signature_data);
+    free(signature_data);
+    printf("signature:%s\n", signature);
+    // req->set_header(req, "Date", date)
+
+    char tmp[128] = {0};
+    snprintf(tmp, sizeof(tmp), "%ld", date);
+    req->set_header(req, "SessionKey", session_key);
+    req->set_header(req, "X-Request-ID", uuid);
+    req->set_header(req, "X-Request-Date", tmp);
+    req->set_header(req, "Signature", signature);
+    req->set_header(req, "PkId", rsa_pkid);
+
+    req->set_header(req, "Accept", "application/json;charset=UTF-8");
+    req->set_header(req, "Cookie", "apm_key=442B469E314C60BD7E94B8D38B2508E9; apm_uid=0F310A9138C4597D24E634AF0CB5DDFB; apm_ct=20240514104347000; apm_ua=B78B4E2D6C0A362C418B145FE44ED73F; JSESSIONID=77EF1BD4222AFF30027DC3CB0130806D; COOKIE_LOGIN_USER=1E8C73CA11130323563DF55CDD6544FD0F7070F473458CA876DAE4EBCCE98E6608E62F57F309D43511A71452B9F82429611D1D3C0B4812AE");
+
+    
+
+    size_t rsa_len = sizeof(tmp);
+
+    int rc = tcloud_utils_rsa_encrypt(pub, pre_aes_key, strlen(pre_aes_key), tmp, &rsa_len);
+    printf("rc:%d\n", rc);
+    
+    printf("encryption text:%s\n", tmp);
+
+    char *encryption_text = hex_to_string(tmp, rsa_len);
+    printf("encryption text:%s\n", encryption_text);
+    req->set_header(req, "EncryptionText", encryption_text);
+    
+    tcloud_buffer_reset(&b);
+    req->request(req, &b, NULL);
+
+    free(signature);
+    printf("data:%s\n", b.data);
+    tcloud_request_free(req);
     tcloud_buffer_free(&b);
 
     return 0;
