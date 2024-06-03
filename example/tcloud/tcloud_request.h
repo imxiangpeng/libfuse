@@ -17,11 +17,11 @@ struct tcloud_request {
     int (*get)(struct tcloud_request *,const char* url, struct tcloud_buffer *b, struct tcloud_buffer *h);
     int (*post)(struct tcloud_request *,const char* url, struct tcloud_buffer *b, struct tcloud_buffer *h);
     int (*request)(struct tcloud_request *, const char* url, struct tcloud_buffer *b, struct tcloud_buffer *h);
+    int (*request_aio)(struct tcloud_request *, const char* url, struct tcloud_buffer *b, struct tcloud_buffer *h);
     // int (*request_params)(struct tcloud_request *, struct tcloud_buffer *b, struct tcloud_buffer *h);
 };
 
 
 struct tcloud_request *tcloud_request_new(void);
 void tcloud_request_free(struct tcloud_request *req);
-
 #endif

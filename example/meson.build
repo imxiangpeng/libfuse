@@ -63,3 +63,9 @@ executable('tcloud_login', ['tcloud/tcloud_login.c', 'tcloud/tcloud_buffer.c', '
     dependencies: [ thread_dep, libfuse_dep, jsonc_library, curl_library, uuid_library, ssl_library ],
     include_directories: 'tcloud/j2s',
         install: false)
+
+executable('tcloud_download', ['tcloud/tcloud_download.c', 'tcloud/tcloud_buffer.c', 'tcloud/tcloud_request.c', 'tcloud/tcloud_utils.c', 'tcloud/xxtea.c', 'tcloud/hr_log.c'],
+    dependencies: [ thread_dep, libfuse_dep, jsonc_library, curl_library, uuid_library, ssl_library ],
+    include_directories: 'tcloud/j2s',
+        install: false)
+

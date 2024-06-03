@@ -115,3 +115,124 @@ int tcloud_buffer_append_string(struct tcloud_buffer *buf, const char *str) {
    
     return 0;
 }
+
+
+
+/*the len must be power of 2 */
+#define MAX_CYCLE_BUFFER_LEN (0x80000) /*(0x10000)*/ /*1M/ 4k = 256 , it means we can transport 256 sections at least*/
+#define MIN(X, Y) (X) > (Y) ? (Y) : (X)
+#define MAX(X, Y) (X) > (Y) > (X) : (Y)
+
+int cycle_buffer_init(cycle_buffer_t **cycle_buffer, unsigned int data_len){
+    int size = data_len; //MAX_ESINJECT_BUFFER_LEN;
+    if ( !cycle_buffer || data_len <= 0 ) {
+        return -1;
+    }
+    if ( size & (size - 1) ) {
+        printf(" size must be power of 2 \n");
+        return -1;
+    }
+    *cycle_buffer = (cycle_buffer_t *)malloc(sizeof(cycle_buffer_t));
+    if ( !(*cycle_buffer) ) {
+        return -1;
+    }
+    memset((void*) (*cycle_buffer), 0, sizeof(cycle_buffer_t));
+
+    (*cycle_buffer)->buff_size = size;
+    (*cycle_buffer)->pos_in = (*cycle_buffer)->pos_out = 0;
+
+
+    (*cycle_buffer)->buff = (unsigned char *)malloc((*cycle_buffer)->buff_size);
+    if ( !(*cycle_buffer)->buff ) {
+
+        free(*cycle_buffer);
+        return -1;
+    }
+
+    memset((*cycle_buffer)->buff, 0, (*cycle_buffer)->buff_size);
+
+    return 0;
+}
+
+int cycle_buffer_destroy(cycle_buffer_t **cycle_buffer){
+    if ( !cycle_buffer || !(*cycle_buffer) ) {
+        return -1;
+    }
+    if ( (*cycle_buffer)->buff ) {
+        free((*cycle_buffer)->buff);
+        (*cycle_buffer)->buff = NULL;
+    }
+    memset((void *)(*cycle_buffer), 0, sizeof(cycle_buffer_t));
+    free(*cycle_buffer);
+    *cycle_buffer = NULL;
+    return 0;
+}
+
+int cycle_buffer_reset(cycle_buffer_t *cycle_buffer){
+
+
+    if ( !cycle_buffer ) {
+        return -1;
+    }
+    cycle_buffer->pos_in = cycle_buffer->pos_out = 0;
+    return 0;
+}
+
+unsigned int cycle_buffer_get(cycle_buffer_t *cycle_buf, unsigned char *buf, unsigned int len){
+    cycle_buffer_t *cycle_buff = cycle_buf;
+    if ( !cycle_buff ) {
+        printf("%s(%d): invalid handle ...\n", __FUNCTION__, __LINE__);
+        return 0;
+    }
+    unsigned int left = 0;
+
+    len = MIN(len, (cycle_buff->pos_in - cycle_buff->pos_out));
+    left = MIN(len, cycle_buff->buff_size - (cycle_buff->pos_out & (cycle_buff->buff_size - 1)));
+    memcpy((void *)buf, cycle_buff->buff + (cycle_buff->pos_out & (cycle_buff->buff_size - 1)), left);
+    memcpy((void *)(buf + left), cycle_buff->buff , len - left);
+    cycle_buff->pos_out += len;
+    return len;
+}
+
+unsigned int cycle_buffer_put(cycle_buffer_t *cycle_buf, unsigned char *buf, unsigned int len, int immediate){
+    cycle_buffer_t *cycle_buff = cycle_buf;
+    unsigned real_len = len;
+    if ( !cycle_buff ) {
+
+        printf("%s(%d): invalid handle ...\n", __FUNCTION__, __LINE__);
+        return 0;
+    }
+    unsigned int left = 0;
+    /*2014-11-16, firstly check enough space otherwise return immediate do not wait block*/
+    if( immediate)
+    {
+        real_len = MIN(real_len, cycle_buff->buff_size - (cycle_buff->pos_in - cycle_buff->pos_out));
+
+        if( real_len < len)
+        {
+            printf("%s(%d): no enough space for :%d\n", __FUNCTION__, __LINE__, len);
+            return 0;
+        }
+    }
+
+    real_len = len;
+    real_len = MIN(real_len, cycle_buff->buff_size - (cycle_buff->pos_in - cycle_buff->pos_out));
+
+    if( immediate && real_len < len)
+    {
+        printf("%s(%d): no enough space for :%d\n", __FUNCTION__, __LINE__, len);
+        return 0;
+    }
+    left = MIN(real_len, cycle_buff->buff_size - (cycle_buff->pos_in & (cycle_buff->buff_size - 1)));
+    memcpy((void *)(cycle_buff->buff + (cycle_buff->pos_in & (cycle_buff->buff_size - 1))), (void *)buf, left);
+    memcpy((void *)cycle_buff->buff , buf + left, real_len - left);
+
+
+    cycle_buff->pos_in += real_len;
+
+    return real_len;
+}
+
+unsigned int cycle_buffer_available_size(cycle_buffer_t *cycle_buf) {
+    return cycle_buf->pos_in - cycle_buf->pos_out;
+}

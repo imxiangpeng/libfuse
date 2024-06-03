@@ -299,6 +299,8 @@ int web_initmulti() {
     free(signature_data);
     printf("signature:%s\n", signature);
     // req->set_header(req, "Date", date)
+    // 
+    free(params);
 
     char tmp[128] = {0};
     snprintf(tmp, sizeof(tmp), "%ld", date);
@@ -323,6 +325,7 @@ int web_initmulti() {
     char *encryption_text = hex_to_string(tmp, rsa_len);
     printf("encryption text:%s\n", encryption_text);
     req->set_header(req, "EncryptionText", encryption_text);
+    free(encryption_text);
     
     tcloud_buffer_reset(&b);
     req->get(req, initmultiupload, &b, NULL);

@@ -895,8 +895,8 @@ static void tcloudfs_release(fuse_req_t req, fuse_ino_t ino,
 
 void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
                    struct fuse_file_info *fi) {
-    // printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
-    //       fuse_req_userdata(req), ino);
+     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+           fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
     if (ino == FUSE_ROOT_ID) {
@@ -916,6 +916,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     }
 
     if (!fi->fh) {
+        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         fuse_reply_err(req, -EBADF);
         return;
     }
@@ -926,12 +927,14 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 
     b = malloc(sizeof(struct fuse_bufvec));
     if (b == NULL) {
+        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         fuse_reply_err(req, -ENOMEM);
         return;
     }
 
     mem = malloc(size);
     if (mem == NULL) {
+        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         free(b);
         fuse_reply_err(req, -ENOMEM);
         return;
@@ -942,6 +945,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     b->buf[0].mem = mem;
     b->buf[0].size = rs;
 
+    printf("%s(%d):  .............read:%ld\n", __FUNCTION__, __LINE__, rs);
     if (rs >= 0) {
         fuse_reply_data(req, b, FUSE_BUF_SPLICE_MOVE);
     } else {

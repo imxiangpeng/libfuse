@@ -120,6 +120,7 @@ static int _http_request(struct tcloud_request *req, const char *url, struct tcl
         _curl = curl_url();
         curl_url_set(_curl, CURLUPART_URL, url, 0);
         // release memory directly ...
+        // because request maybe reused!
         hr_list_for_each_entry_safe(p, n, &priv->query, entry) {
             curl_url_set(_curl, CURLUPART_QUERY, p->value, CURLU_APPENDQUERY);
             if (p->value) free(p->value);
@@ -146,6 +147,8 @@ static int _http_request(struct tcloud_request *req, const char *url, struct tcl
         }
         payload = (char *)calloc(1, len);
 
+        // release memory directly ...
+        // because request maybe reused!
         hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
             payload = strcat(payload, p->value);
             if (p->value) free(p->value);
