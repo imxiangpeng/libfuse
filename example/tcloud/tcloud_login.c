@@ -88,7 +88,7 @@ int login(void) {
     req->set_header(req, "Referer", "https://cloud.189.cn");
 
     tcloud_buffer_reset(&b);
-    req->request(req, TR_METHOD_GET, listfiles_url, &b, NULL);
+    req->request(req, listfiles_url, &b, NULL);
 
     free(signature);
     printf("data:%s\n", b.data);

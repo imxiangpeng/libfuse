@@ -83,6 +83,7 @@ static int _allow_redirect(struct tcloud_request *req, int val) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
 
     priv->allow_redirect = !!val;
+    return 0;
 }
 static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
                             void *userdata) {
@@ -95,14 +96,14 @@ static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
     return total;
 }
 
-static int _http_request(struct tcloud_request *req, tcloud_request_method_e method, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
+static int _http_request(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
     CURLcode rc;
     CURL *curl = NULL;
     CURLU *_curl = NULL;
     long response_code = 0;
     char *redirect_url = NULL;
-    struct tcloud_param *p;
+    struct tcloud_param *n, *p;
     char *payload = NULL;
 
     // b maybe null, when you do not care data
@@ -118,10 +119,13 @@ static int _http_request(struct tcloud_request *req, tcloud_request_method_e met
     } else {
         _curl = curl_url();
         curl_url_set(_curl, CURLUPART_URL, url, 0);
-        hr_list_for_each_entry(p, &priv->query, entry) {
+        // release memory directly ...
+        hr_list_for_each_entry_safe(p, n, &priv->query, entry) {
             curl_url_set(_curl, CURLUPART_QUERY, p->value, CURLU_APPENDQUERY);
+            if (p->value) free(p->value);
+            hr_list_del(&p->entry);
+            free(p);
         }
-
         curl_easy_setopt(curl, CURLOPT_CURLU, _curl);
     }
 
@@ -134,16 +138,21 @@ static int _http_request(struct tcloud_request *req, tcloud_request_method_e met
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
     }
 
-    if (TR_METHOD_POST == method) {
+    if (TR_METHOD_POST == req->method) {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         int len = 1;  // end '\0'
         hr_list_for_each_entry(p, &priv->form, entry) {
             len += strlen(p->value);
         }
         payload = (char *)calloc(1, len);
-        hr_list_for_each_entry(p, &priv->form, entry) {
+
+        hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
             payload = strcat(payload, p->value);
+            if (p->value) free(p->value);
+            hr_list_del(&p->entry);
+            free(p);
         }
+
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, len - 1);
     }
@@ -174,24 +183,36 @@ static int _http_request(struct tcloud_request *req, tcloud_request_method_e met
     printf("code:%d, response code:%ld\n", CURLE_OK, response_code);
     printf("code:%d, redirect url:%s\n", CURLE_OK, redirect_url);
 
+    // clean memory, because we may use this socket to other request
+
+    if (priv->headers) {
+        curl_slist_free_all(priv->headers);
+        priv->headers = NULL;
+    }
+    hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
+        if (p->value) free(p->value);
+        hr_list_del(&p->entry);
+        free(p);
+    }
+
     return 0;
 }
 
 static int _http_do_get(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
-
     if (!req || !req->request | !url) {
         return -1;
     }
 
-    return req->request(req, TR_METHOD_GET, url, b, h);
+    req->method = TR_METHOD_GET;
+    return req->request(req, url, b, h);
 }
 static int _http_do_post(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
-
     if (!req || !req->request | !url) {
         return -1;
     }
 
-    return req->request(req, TR_METHOD_POST, url, b, h);
+    req->method = TR_METHOD_POST;
+    return req->request(req, url, b, h);
 }
 struct tcloud_request *tcloud_request_new(void) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)calloc(1, sizeof(struct tcloud_request_priv));
@@ -200,6 +221,10 @@ struct tcloud_request *tcloud_request_new(void) {
     if (!priv->curl) {
         return NULL;
     }
+
+    priv->request.method = TR_METHOD_GET;
+
+    // tcloud_buffer_alloc(&priv->url);
 
     priv->request.set_query = _set_query;
     priv->request.set_form = _set_form;
@@ -229,8 +254,10 @@ void tcloud_request_free(struct tcloud_request *req) {
         free(priv->effect_url);
     }
 
-    if (priv->headers)
+    if (priv->headers) {
         curl_slist_free_all(priv->headers);
+        priv->headers = NULL;
+    }
 
     hr_list_for_each_entry_safe(p, n, &priv->query, entry) {
         if (p->value) free(p->value);

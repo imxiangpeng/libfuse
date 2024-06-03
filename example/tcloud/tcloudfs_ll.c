@@ -315,6 +315,9 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
 }
 static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     struct tcloudfs_priv *priv = (struct tcloudfs_data *)userdata;
+
+    // tcloud_drive_init();
+
     printf("%s(%d): .........priv:%p,   conn:%p, capab:0x%X\n", __FUNCTION__, __LINE__, priv, conn, conn->capable);
     // conn->max_read = 1024 *1024 *1024;
     printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
@@ -1131,10 +1134,14 @@ int main(int argc, char **argv) {
     HR_INIT_LIST_HEAD(&_priv.head);
     HR_INIT_LIST_HEAD(&_priv.delete_pending_queue);
 
+    tcloud_drive_init();
+
     struct tcloudfs_node *root = allocate_node(-11 /*FUSE_ROOT_ID*/, "/", NULL);
     root->mode = S_IFDIR | TCLOUDFS_DEFAULT_MODE;
 
     tcloud_drive_getattr(root->cloud_id, 0 /*folder*/, &root->atime, &root->ctime);
+    
+
     root->mtime = root->atime;
     hr_list_add_tail(&root->entry, &_priv.head);
 

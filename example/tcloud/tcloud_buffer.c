@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define STRING_EXTRA_SIZE (64)
+
 int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
     if (!buf)
         return -1;
@@ -98,6 +100,18 @@ int tcloud_buffer_append(struct tcloud_buffer *buf, void *data, size_t size) {
 }
 
 int tcloud_buffer_append_string(struct tcloud_buffer *buf, const char *str) {
+    int length = 0;
     if (!buf || !str) return -1;
-    return tcloud_buffer_append(buf, (void *)str, strlen(str));
+
+    length = strlen(str); // '\0'
+    if (length > buf->size - buf->offset) {
+        int ret = tcloud_buffer_realloc(buf, buf->size + length + STRING_EXTRA_SIZE + 1);
+        if (ret != 0) {
+            return -1;  // memory not enough
+        }
+    }
+    memcpy((void *)(buf->data + buf->offset), (void*)str, length);
+    buf->offset += length;
+   
+    return 0;
 }

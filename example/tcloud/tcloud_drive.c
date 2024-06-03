@@ -1,6 +1,8 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #include <ctype.h>
+#include "tcloud/tcloud_request.h"
+#include "tcloud_utils.h"
 #endif
 
 #include <json-c/json.h>
@@ -31,6 +33,7 @@
 
 #include "j2sobject_cloud.h"
 #include "tcloud_drive.h"
+#include "tcloud_request.h"
 #include "xxtea.h"
 #include "uthash.h"
 
@@ -54,18 +57,25 @@
 #define API_URL "http://api.cloud.189.cn"
 #define UPLOAD_URL "https://upload.cloud.189.cn"
 
-const char * secret = "A8CD8047724920AC491C30F01EEDF6F3";
-const char * session_key = "a947ec7d-0ebf-4835-bc8d-0fb75853d3c5";
+const char *secret = "A8CD8047724920AC491C30F01EEDF6F3";
+const char *session_key = "a947ec7d-0ebf-4835-bc8d-0fb75853d3c5";
 
+struct tcloud_drive {
+    struct tcloud_request *request;  // api request
+    pthread_mutex_t mutex;
+};
 struct tcloud_drive_fd {
     int64_t id;  // cloud id
     CURL *curl;  // opened handle
     char *url;
+
     // default libfuse using multi thread async mode
     // but we do not support (libcurl)
     // also you can use -s to disable libfuse multi thread feature
     pthread_mutex_t mutex;
 };
+
+static struct tcloud_drive _drive;
 
 static long long time_ms() {
     struct timespec ts;
@@ -275,15 +285,16 @@ static int _http_get(const char *url, struct curl_slist *headers, struct tcloud_
     return 0;
 }
 
+#if 0
 static int _tcloud_drive_http_get(const char *url, const char *payload, struct tcloud_buffer *buf) {
     char *request_url = NULL;
     struct curl_slist *headers = NULL;
     char tmp[512] = {0};
 
-    //const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
-    //const char* session_key = "0bdc1b48-b764-478d-8984-c1faccd99a78";
-    // const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
-    //const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
+    // const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
+    // const char* session_key = "0bdc1b48-b764-478d-8984-c1faccd99a78";
+    //  const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
+    // const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
     uuid_t uuid;
     char request_id[UUID_STR_LEN + 20] = {0};
 
@@ -343,13 +354,56 @@ static int _tcloud_drive_http_get(const char *url, const char *payload, struct t
     free(request_url);
     return ret;
 }
+#endif
+static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri, struct tcloud_buffer *params) {
+    char tmp[512] = {0};
+    if (!req) return -1;
+
+    char uuid[UUID_STR_LEN] = {0};
+    tcloud_utils_generate_uuid(uuid, sizeof(uuid));
+
+    char date[64] = {0};
+    tcloud_utils_http_date_string(date, sizeof(date));
+
+    req->set_header(req, "Date", date);
+    req->set_header(req, "SessionKey", session_key);
+    req->set_header(req, "X-Request-ID", uuid);
+
+    char *signature_data = NULL;
+    if (params) {
+        asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s&params=%s", session_key, req->method == TR_METHOD_GET ? "GET" : "POST", uri, date, params->data);
+    } else {
+        asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session_key, req->method == TR_METHOD_GET ? "GET" : "POST", uri, date);
+    }
+
+  HR_LOGD("%s(%d): signature data:%s\n", __FUNCTION__, __LINE__, signature_data);
+    char *signature = tcloud_utils_hmac_sha1(secret, (const unsigned char *)signature_data, strlen(signature_data));
+  HR_LOGD("%s(%d): signature:%s\n", __FUNCTION__, __LINE__, signature);
+    req->set_header(req, "Signature", signature);
+    free(signature_data);
+    free(signature);
+
+    req->set_header(req, "Referer", "https://cloud.189.cn");
+
+    req->set_query(req, "clientType", "TELEPC");
+    req->set_query(req, "version", "6.2");
+    req->set_query(req, "channelI", "web_cloud.189.cn");
+    snprintf(tmp, sizeof(tmp), "%d_%d", rand(), rand());
+    req->set_query(req, "rand", tmp);
+
+    return 0;
+}
 
 int tcloud_drive_init(void) {
     curl_global_init(CURL_GLOBAL_ALL);
+
+    _drive.request = tcloud_request_new();
     return 0;
 }
 
 int tcloud_drive_destroy(void) {
+    tcloud_request_free(_drive.request);
+    _drive.request = NULL;
     curl_global_cleanup();
     return 0;
 }
@@ -357,12 +411,20 @@ int tcloud_drive_destroy(void) {
 int tcloud_drive_storage_statfs(struct statvfs *st) {
     struct json_object *root = NULL, *capacity = NULL, *available = NULL, *res_code = NULL;
     struct tcloud_buffer b;
+    struct tcloud_request *req = _drive.request;
+
+    const char *action = "/getUserInfo.action";
+
     tcloud_buffer_alloc(&b, 512);
-    int ret = _tcloud_drive_http_get(API_URL "/getUserInfo.action", NULL, &b);
+
+    int ret = _tcloud_drive_fill_final(_drive.request, "/getUserInfo.action", NULL);
     if (ret != 0) {
         tcloud_buffer_free(&b);
         return ret;
     }
+
+    req->get(req, action, &b, NULL);
+
     printf("data:%s\n", b.data);
     root = json_tokener_parse(b.data);
     tcloud_buffer_free(&b);
@@ -400,22 +462,30 @@ int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct ti
 
     struct json_object *root = NULL, *res_code = NULL;
     struct tcloud_buffer b;
-    char *url = NULL;
-    asprintf(&url, API_URL
-             "%s"
-             "?folderId=%ld",
-             type == 0 ? "/getFolderInfo.action" : "/getFileInfo.action",
-             id);
 
-    if (!url) return -1;
+    struct tcloud_request *req = _drive.request;
+
+    const char *action = type == 0 ? "/getFolderInfo.action" : "/getFileInfo.action";
 
     tcloud_buffer_alloc(&b, 512);
-    int ret = _tcloud_drive_http_get(url, NULL, &b);
-    free(url);
+
+    // req->set_query(req, "folderId", "-11");
+    char *url = NULL;
+    asprintf(&url, API_URL "%s?folderId=%ld", action, id);
+    if (!url) return -1;
+
+    req->set_header(req, "Accept", "application/json;charset=UTF-8");
+    int ret = _tcloud_drive_fill_final(req, action, NULL);
+  
+    HR_LOGD("%s(%d): failed ..........ret:%d...\n", __FUNCTION__, __LINE__, ret);
     if (ret != 0) {
         tcloud_buffer_free(&b);
         return ret;
     }
+
+    req->get(req, url, &b, NULL);
+
+    free(url);
 
     HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
     root = json_tokener_parse(b.data);
@@ -454,9 +524,16 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
     char *url = NULL;
     int page_num = 1;
     int page_size = 100;
+
+    char tmp[256] = {0};
+    struct tcloud_request *req = _drive.request;
+    const char *action = "/listFiles.action";
+  
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
+
     asprintf(&url,
              API_URL
-             "/listFiles.action"
+             "%s"
              "?folderId=%ld"
              "&fileType=0"
              "&mediaType=0"
@@ -466,17 +543,37 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
              "&descending=true"
              "&pageNum=%d"
              "&pageSize=%d",
+             action,
              id, page_num, page_size);
 
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     if (!url) return -1;
 
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     tcloud_buffer_alloc(&b, 2048);
-    int ret = _tcloud_drive_http_get(url, NULL, &b);
-    free(url);
+    req->method = TR_METHOD_GET;
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
+    int ret = _tcloud_drive_fill_final(req, action, NULL);
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     if (ret != 0) {
         tcloud_buffer_free(&b);
         return ret;
     }
+
+  printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
+
+    req->set_header(req, "Accept", "application/json;charset=UTF-8");
+    ret = req->request(req, url, &b, NULL);
+    free(url);
+  printf("%s(%d): ...ret:%d.......\n", __FUNCTION__, __LINE__, ret);
+  HR_LOGD("%s(%d): ....data:%s......\n", __FUNCTION__, __LINE__, b.data);
+
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+
     printf("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
     ret = j2sobject_deserialize_target(dir, b.data, "fileListAO");
     HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
@@ -497,7 +594,9 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
     struct json_object *root = NULL, *res_code = NULL;
     struct tcloud_buffer b;
     char *url = NULL;
-  int64_t id = -1;
+    int64_t id = -1;
+    struct tcloud_request *req = _drive.request;
+    const char *action = "/createFolder.action";
 
     if (!name) return -1;
 
@@ -510,13 +609,21 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
     if (!url) return -1;
 
     tcloud_buffer_alloc(&b, 512);
-    int ret = _tcloud_drive_http_get(url, NULL, &b);
+    req->method = TR_METHOD_GET;
+    int ret = _tcloud_drive_fill_final(req, action, NULL);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+
+    ret = req->request(req, url, &b, NULL);
     free(url);
     if (ret != 0) {
         tcloud_buffer_free(&b);
         return ret;
     }
 
+ 
     HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
     root = json_tokener_parse(b.data);
     tcloud_buffer_free(&b);
@@ -572,7 +679,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
     // const char* url = "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action";
     struct curl_slist *headers = NULL;
     // const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
-    //const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
+    // const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
 
     char tmp[512] = {0};
 

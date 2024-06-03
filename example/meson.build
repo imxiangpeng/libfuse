@@ -54,7 +54,7 @@ executable('cloud_j2sobject', ['tcloud/tests/cloud_j2sobject.c', 'tcloud/j2sobje
     include_directories: ['tcloud/j2s', 'tcloud'],
         install: false)
 
-executable('tcloudfs_ll', ['tcloud/tcloudfs_ll.c', 'tcloud/tcloud_drive.c', 'tcloud/tcloud_buffer.c', 'tcloud/j2sobject_cloud.c', 'tcloud/j2s/j2sobject.c', 'tcloud/xxtea.c', 'tcloud/hr_log.c'],
+executable('tcloudfs_ll', ['tcloud/tcloudfs_ll.c', 'tcloud/tcloud_drive.c', 'tcloud/tcloud_buffer.c', 'tcloud/j2sobject_cloud.c', 'tcloud/j2s/j2sobject.c', 'tcloud/xxtea.c', 'tcloud/hr_log.c', 'tcloud/tcloud_utils.c', 'tcloud/tcloud_request.c'],
     dependencies: [ thread_dep, libfuse_dep, jsonc_library, curl_library, uuid_library, ssl_library ],
     include_directories: 'tcloud/j2s',
         install: false)
