@@ -54,6 +54,9 @@
 #define API_URL "http://api.cloud.189.cn"
 #define UPLOAD_URL "https://upload.cloud.189.cn"
 
+const char * secret = "A8CD8047724920AC491C30F01EEDF6F3";
+const char * session_key = "a947ec7d-0ebf-4835-bc8d-0fb75853d3c5";
+
 struct tcloud_drive_fd {
     int64_t id;  // cloud id
     CURL *curl;  // opened handle
@@ -277,8 +280,8 @@ static int _tcloud_drive_http_get(const char *url, const char *payload, struct t
     struct curl_slist *headers = NULL;
     char tmp[512] = {0};
 
-    const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
-    const char* session_key = "0bdc1b48-b764-478d-8984-c1faccd99a78";
+    //const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
+    //const char* session_key = "0bdc1b48-b764-478d-8984-c1faccd99a78";
     // const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
     //const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
     uuid_t uuid;
@@ -568,8 +571,8 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
     char *url = NULL;
     // const char* url = "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action";
     struct curl_slist *headers = NULL;
-    const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
-    const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
+    // const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
+    //const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
 
     char tmp[512] = {0};
 

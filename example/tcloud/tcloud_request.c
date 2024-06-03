@@ -22,13 +22,15 @@ struct tcloud_request_priv {
     // must make sure it's first element
     struct tcloud_request request;
 
-    tcloud_request_method_e type;
+    CURL *curl;
+    // tcloud_request_method_e type;
     int allow_redirect;  // allow redirect
     struct hr_list_head query;
     struct hr_list_head form;
     struct curl_slist *headers;
     char *effect_url;
-    char url[]; // input url is appended end
+    // char *url
+    // char url[];  // input url is appended end
 };
 
 static int _set_query(struct tcloud_request *req, const char *name, const char *val) {
@@ -93,11 +95,11 @@ static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
     return total;
 }
 
-static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, struct tcloud_buffer *h) {
+static int _http_request(struct tcloud_request *req, tcloud_request_method_e method, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
     CURLcode rc;
     CURL *curl = NULL;
-    CURLU *url = NULL;
+    CURLU *_curl = NULL;
     long response_code = 0;
     char *redirect_url = NULL;
     struct tcloud_param *p;
@@ -106,21 +108,21 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
     // b maybe null, when you do not care data
     if (!req) return -1;
 
-    curl = curl_easy_init();
+    curl = priv->curl;
     if (!curl) {
         return -1;
     }
 
     if (hr_list_empty(&priv->query)) {
-        curl_easy_setopt(curl, CURLOPT_URL, &priv->url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
     } else {
-        url = curl_url();
-        curl_url_set(url, CURLUPART_URL, priv->url, 0);
+        _curl = curl_url();
+        curl_url_set(_curl, CURLUPART_URL, url, 0);
         hr_list_for_each_entry(p, &priv->query, entry) {
-            curl_url_set(url, CURLUPART_QUERY, p->value, CURLU_APPENDQUERY);
+            curl_url_set(_curl, CURLUPART_QUERY, p->value, CURLU_APPENDQUERY);
         }
 
-        curl_easy_setopt(curl, CURLOPT_CURLU, url);
+        curl_easy_setopt(curl, CURLOPT_CURLU, _curl);
     }
 
     if (priv->headers)
@@ -131,14 +133,14 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
     if (!b) {
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
     }
-    
-    if (T_REQ_POST == priv->type) {
+
+    if (TR_METHOD_POST == method) {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        int len = 1; // end '\0'
+        int len = 1;  // end '\0'
         hr_list_for_each_entry(p, &priv->form, entry) {
             len += strlen(p->value);
         }
-        payload = (char*)calloc(1, len);
+        payload = (char *)calloc(1, len);
         hr_list_for_each_entry(p, &priv->form, entry) {
             payload = strcat(payload, p->value);
         }
@@ -155,12 +157,11 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
         free(payload);
     }
 
-    if (url) {
-        curl_url_cleanup(url);
+    if (_curl) {
+        curl_url_cleanup(_curl);
     }
 
     if (rc != CURLE_OK) {
-        curl_easy_cleanup(curl);
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rc));
         return -1;
     }
@@ -173,21 +174,39 @@ static int _http_request(struct tcloud_request *req, struct tcloud_buffer *b, st
     printf("code:%d, response code:%ld\n", CURLE_OK, response_code);
     printf("code:%d, redirect url:%s\n", CURLE_OK, redirect_url);
 
-    curl_easy_cleanup(curl);
     return 0;
 }
 
-struct tcloud_request *tcloud_request_new(tcloud_request_method_e type, const char *url) {
-    struct tcloud_request_priv *priv = (struct tcloud_request_priv *)calloc(1, sizeof(struct tcloud_request_priv) + strlen(url) + 1);
+static int _http_do_get(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
 
-    priv->type = type;
+    if (!req || !req->request | !url) {
+        return -1;
+    }
 
-    memcpy(priv->url, url, strlen(url));
+    return req->request(req, TR_METHOD_GET, url, b, h);
+}
+static int _http_do_post(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h) {
+
+    if (!req || !req->request | !url) {
+        return -1;
+    }
+
+    return req->request(req, TR_METHOD_POST, url, b, h);
+}
+struct tcloud_request *tcloud_request_new(void) {
+    struct tcloud_request_priv *priv = (struct tcloud_request_priv *)calloc(1, sizeof(struct tcloud_request_priv));
+
+    priv->curl = curl_easy_init();
+    if (!priv->curl) {
+        return NULL;
+    }
 
     priv->request.set_query = _set_query;
     priv->request.set_form = _set_form;
     priv->request.set_header = _set_header;
     priv->request.allow_redirect = _allow_redirect;
+    priv->request.get = _http_do_get;
+    priv->request.post = _http_do_post;
     priv->request.request = _http_request;
 
     priv->headers = NULL;
@@ -200,7 +219,12 @@ void tcloud_request_free(struct tcloud_request *req) {
     struct tcloud_param *n, *p;
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
     if (!req) return;
-    
+
+    if (priv->curl) {
+        curl_easy_cleanup(priv->curl);
+        priv->curl = NULL;
+    }
+
     if (priv->effect_url) {
         free(priv->effect_url);
     }

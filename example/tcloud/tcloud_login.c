@@ -27,14 +27,14 @@ int login(void) {
     tcloud_buffer_alloc(&b, 2048);
 #if 1
 
-    req = tcloud_request_new(T_REQ_GET, login_url);
+    req = tcloud_request_new();
 
     req->set_query(req, "id", "-11");
     req->set_form(req, "id", "-11");
     req->set_header(req, "Referer", "https://cloud.189.cn");
     // req->allow_redirect(req, 0);
 
-    req->request(req, NULL /*&b*/, NULL);
+    req->get(req, login_url, NULL /*&b*/, NULL);
 
     printf("data:%s\n", b.data);
 
@@ -43,7 +43,7 @@ int login(void) {
     printf("%s(%d): ....................\n", __FUNCTION__, __LINE__);
 
     // req = tcloud_request_new(T_REQ_GET, listfiles_url);
-    req = tcloud_request_new(T_REQ_POST, listfiles_url);
+    req = tcloud_request_new();
     req->set_query(req, "folderId", "-11");
     req->set_query(req, "pageSize", "100");
     req->set_query(req, "pageNum", "1");
@@ -88,7 +88,7 @@ int login(void) {
     req->set_header(req, "Referer", "https://cloud.189.cn");
 
     tcloud_buffer_reset(&b);
-    req->request(req, &b, NULL);
+    req->request(req, TR_METHOD_GET, listfiles_url, &b, NULL);
 
     free(signature);
     printf("data:%s\n", b.data);
@@ -279,7 +279,7 @@ int web_initmulti() {
 
     // const char* initmultiupload = "https://upload.cloud.189.cn/person/initMultiUpload";
     const char *initmultiupload = "http://upload.cloud.189.cn/person/initMultiUpload";
-    req = tcloud_request_new(T_REQ_GET, initmultiupload);
+    req = tcloud_request_new();
     req->set_query(req, "params", params);
     // free(params);
 
@@ -325,7 +325,7 @@ int web_initmulti() {
     req->set_header(req, "EncryptionText", encryption_text);
     
     tcloud_buffer_reset(&b);
-    req->request(req, &b, NULL);
+    req->get(req, initmultiupload, &b, NULL);
 
     free(signature);
     printf("data:%s\n", b.data);

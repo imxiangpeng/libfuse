@@ -315,9 +315,17 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
 }
 static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     struct tcloudfs_priv *priv = (struct tcloudfs_data *)userdata;
+    printf("%s(%d): .........priv:%p,   conn:%p, capab:0x%X\n", __FUNCTION__, __LINE__, priv, conn, conn->capable);
+    // conn->max_read = 1024 *1024 *1024;
     printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
-    conn->max_read = 1024 *1024 *1024;
-    printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
+    
+    if (conn->capable & FUSE_CAP_ASYNC_READ) {
+        printf("drop : FUSE_CAP_ASYNC_READ\n");
+        // conn->capable &= ~FUSE_CAP_ASYNC_READ;
+    }
+    
+    conn->want &= ~FUSE_CAP_ASYNC_READ;
+    conn->want &= ~FUSE_CAP_SPLICE_READ;   
 }
 
 static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
