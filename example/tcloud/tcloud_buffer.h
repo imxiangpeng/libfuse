@@ -31,6 +31,7 @@ typedef struct {
 int cycle_buffer_init(cycle_buffer_t **cycle_buffer, unsigned int data_len);
 int cycle_buffer_destroy(cycle_buffer_t **cycle_buffer);
 int cycle_buffer_reset(cycle_buffer_t *cycle_buffer);
+unsigned int cycle_buffer_data_size(cycle_buffer_t *cycle_buf);
 unsigned int cycle_buffer_available_size(cycle_buffer_t *cycle_buf);
 unsigned int cycle_buffer_get(cycle_buffer_t *cycle_buf, unsigned char *buf, unsigned int len);
 unsigned int cycle_buffer_put(cycle_buffer_t *cycle_buf, unsigned char *buf, unsigned int len, int immediate);

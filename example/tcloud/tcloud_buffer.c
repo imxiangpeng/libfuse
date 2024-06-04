@@ -233,6 +233,9 @@ unsigned int cycle_buffer_put(cycle_buffer_t *cycle_buf, unsigned char *buf, uns
     return real_len;
 }
 
-unsigned int cycle_buffer_available_size(cycle_buffer_t *cycle_buf) {
+unsigned int cycle_buffer_data_size(cycle_buffer_t *cycle_buf) {
     return cycle_buf->pos_in - cycle_buf->pos_out;
+}
+unsigned int cycle_buffer_available_size(cycle_buffer_t *cycle_buf) {
+    return cycle_buf->buff_size - (cycle_buf->pos_in - cycle_buf->pos_out);
 }
