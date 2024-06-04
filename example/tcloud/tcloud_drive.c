@@ -1,6 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #include <ctype.h>
+#include <curl/multi.h>
 #include "tcloud/tcloud_request.h"
 #include "tcloud_utils.h"
 #endif
@@ -814,7 +815,17 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
             mc = curl_multi_perform(fd->multi, &still_running);
             // HR_LOGD("%s(%d): mc:%d, still_running:%d\n", __FUNCTION__, __LINE__, mc, still_running);
+            if (mc != CURLM_OK) {
+                HR_LOGD("%s(%d): mc:%d, still_running:%d.... failed!!!!!!!!!\n", __FUNCTION__, __LINE__, mc, still_running);
+                break;
+            }
 
+            int msgq = 0;
+            struct CURLMsg *m = curl_multi_info_read(fd->multi, &msgq);
+            if (m && m->msg == CURLMSG_DONE) {
+                HR_LOGD("%s(%d):  read complete ................. total:%ld\n", __FUNCTION__, __LINE__, cycle_total);
+                break;
+            }
             // if (!mc && still_running)
             //    HR_LOGD("%s(%d): wait ... still_running:%d\n", __FUNCTION__, __LINE__, still_running);
 
@@ -824,36 +835,14 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
                 // sleep(1);
                 // still_running = 1;
             }
-       avai = cycle_buffer_available_size(fd->cycle);
+            avai = cycle_buffer_available_size(fd->cycle);
             if (avai > size) {
                 printf("data enough, break; mxppppppppppppppppppppppppppppppppppppppppppppp\n");
-              break;
+                break;
             }
             /* if there are still transfers, loop! */
         } while (still_running);
-#if 0
-        int still_running = 0;
-        int numfds;
-        int res = curl_multi_perform(fd->multi, &still_running);
-    
-    int msgq = 0;
-struct CURLMsg *m = curl_multi_info_read(fd->multi, &msgq);   
-    printf("msg:%d\n", m ? m->msg: -1);
-    HR_LOGD("%s(%d): ...do request.....read:%ld, still :%d\n", __FUNCTION__, __LINE__, result, still_running);
-        CURLMcode mc = curl_multi_wait(fd->multi, NULL, 0, 5000, &numfds);
-    HR_LOGD("%s(%d): ...do request.....read:%ld, still :%d\n", __FUNCTION__, __LINE__, result, still_running);
 
-        printf("numfds:%d, mc:%d\n", numfds, mc);
-
-        res = curl_multi_perform(fd->multi, &still_running);
-    printf("%s(%d): res:%d\n", __FUNCTION__, __LINE__, res);
-    
-
-    usleep(1000 * 1000 * 5);
-      while(CURLM_CALL_MULTI_PERFORM ==
-            curl_multi_perform(fd->multi, &still_running));
-    HR_LOGD("%s(%d): ...do request.....read:%ld, still :%d\n", __FUNCTION__, __LINE__, result, still_running);
-#endif
         curl_easy_setopt(fd->curl, CURLOPT_RANGE, NULL);
     }
 
