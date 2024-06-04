@@ -329,6 +329,14 @@ static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     
     conn->want &= ~FUSE_CAP_ASYNC_READ;
     conn->want &= ~FUSE_CAP_SPLICE_READ;   
+    conn->want &= ~FUSE_CAP_SPLICE_WRITE;
+    conn->want &= ~FUSE_CAP_SPLICE_MOVE;
+    conn->want &= ~FUSE_CAP_EXPORT_SUPPORT;
+    conn->want &= ~FUSE_CAP_IOCTL_DIR;
+
+   conn->want &= ~FUSE_CAP_ASYNC_DIO; 
+    
+    conn->want &= ~FUSE_CAP_SETXATTR_EXT;
 }
 
 static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
@@ -920,7 +928,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
         fuse_reply_err(req, -EBADF);
         return;
     }
-
+#if 0
     struct fuse_bufvec *b = NULL;
 
     void *mem;
@@ -951,7 +959,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     } else {
         fuse_reply_err(req, rs);
     }
-#if 0
+#else
     // HR_LOGD("read node :%p -> %s,  vs fi->fh:%p\n", node, node->name, (void *)fi->fh);
     char *ptr = malloc(size /*+ off*/);
     size = tcloud_drive_read((struct tcloud_drive_fd *)fi->fh, ptr, size, off);
