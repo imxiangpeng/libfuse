@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <curl/multi.h>
 #include <fcntl.h>
+#include <sys/param.h>
 #include <unistd.h>
 #include "tcloud/tcloud_request.h"
 #include "tcloud_utils.h"
@@ -77,8 +78,8 @@ struct tcloud_drive_fd {
     CURL *curl;  // opened handle
     char *url;
 
-    cycle_buffer_t *cycle;
-  
+    // cycle_buffer_t *cycle;
+    struct tcloud_buffer data;
     int fd;
 
     size_t offset;
@@ -215,28 +216,41 @@ static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
 static size_t _cycle_data_receive(void *ptr, size_t size, size_t nmemb,
                                   void *userdata) {
     struct tcloud_drive_fd *fd = (struct tcloud_drive_fd *)userdata;
-    cycle_buffer_t *buf = NULL;
+    struct tcloud_buffer *b = NULL;
     size_t total = size * nmemb;
     HR_LOGD("%s(%d): write:%u\n", __FUNCTION__, __LINE__, total);
     if (!ptr || !userdata)
         return total;  // drop all data
-    buf = fd->cycle;
+    b = &fd->data;
 
-    if (fd->fd == 0 ) {
-      char path[256] = {0};
-      snprintf(path, sizeof(path), "/home/alex/workspace/workspace/libfuse/libfuse/build/""./dump_%p_%ld", (void*)fd, time(NULL));
-    printf("mxp, create:%s\n", path);
-      fd->fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    printf("mxp, create:%s -> %d\n", path, fd->fd);
+    if (fd->fd == 0) {
+        char path[256] = {0};
+        snprintf(path, sizeof(path),
+                 "/home/alex/workspace/workspace/libfuse/libfuse/build/"
+                 "./dump_%p_%ld",
+                 (void *)fd, time(NULL));
+        printf("mxp, create:%s\n", path);
+        fd->fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        printf("mxp, create:%s -> %d\n", path, fd->fd);
     }
-  
+
     if (fd->fd > 0) {
-      int ret = write(fd->fd, ptr, total);
-      if (ret < 0) {
-        perror("write failed:\n");
-      }
-      printf("mxp, write:%d -> %s\n", ret, strerror(errno));
+        int ret = write(fd->fd, ptr, total);
+        if (ret < 0) {
+            perror("write failed:\n");
+        }
+        printf("mxp, write:%d -> %s\n", ret, strerror(errno));
     }
+
+    if (b->size - b->offset < total) {
+        HR_LOGD("%s(%d):not enough, auto pause total:%ld\n", __FUNCTION__, __LINE__, total);
+        fd->paused = 1;
+        return CURL_WRITEFUNC_PAUSE;
+    }
+
+    tcloud_buffer_append(b, ptr, total);
+
+#if 0
     pthread_mutex_lock(&fd->lock);
     // not available
     while (cycle_buffer_available_size(buf) < total) {
@@ -247,16 +261,17 @@ static size_t _cycle_data_receive(void *ptr, size_t size, size_t nmemb,
             return 0;
         }
     }
-    //pthread_mutex_unlock(&fd->lock);
+    // pthread_mutex_unlock(&fd->lock);
     unsigned int rc = cycle_buffer_put(buf, ptr, total, 0);
 
-    //pthread_mutex_lock(&fd->lock);
+    // pthread_mutex_lock(&fd->lock);
     pthread_cond_signal(&fd->read_cond);
     pthread_mutex_unlock(&fd->lock);
     cycle_total += total;
+#endif
 
     // HR_LOGD("%s(%d): write:%u, total:%ld\n", __FUNCTION__, __LINE__, rc, cycle_total);
-    return rc;
+    return total;
 }
 
 int http_post(const char *url, struct curl_slist *headers, const char *payload, size_t payload_length, struct tcloud_buffer *result) {
@@ -793,9 +808,11 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
             pthread_mutex_init(&fd->lock, NULL);
             pthread_cond_init(&fd->write_cond, NULL);
             pthread_cond_init(&fd->read_cond, NULL);
-            cycle_buffer_init(&fd->cycle, TCLOUD_DRIVE_READ_BUFFER_SIZE);
+            // cycle_buffer_init(&fd->cycle, TCLOUD_DRIVE_READ_BUFFER_SIZE);
             fd->multi = curl_multi_init();
             fd->curl = curl_easy_init();
+
+            tcloud_buffer_alloc(&fd->data, 1024 * 1024 * 2);
 
             curl_multi_add_handle(fd->multi, fd->curl);
             curl_easy_setopt(fd->curl, CURLOPT_URL, fd->url);
@@ -804,7 +821,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
             curl_easy_setopt(fd->curl, CURLOPT_WRITEDATA, fd /*->cycle*/);
             // follow redirect
             curl_easy_setopt(fd->curl, CURLOPT_FOLLOWLOCATION, 1);
-            curl_easy_setopt(fd->curl, CURLOPT_BUFFERSIZE, TCLOUD_DRIVE_READ_BUFFER_SIZE / 2);
+            // curl_easy_setopt(fd->curl, CURLOPT_BUFFERSIZE, TCLOUD_DRIVE_READ_BUFFER_SIZE / 2);
         }
         printf("%s(%d): ..fd:%p..download url:%s....\n", __FUNCTION__, __LINE__, fd, json_object_get_string(download_url));
         json_object_put(root);
@@ -832,17 +849,16 @@ int tcloud_drive_release(struct tcloud_drive_fd *fd) {
     curl_multi_remove_handle(fd->multi, fd->curl);
     curl_easy_cleanup(fd->curl);
     curl_multi_cleanup(fd->curl);
-  
 
-  if (fd->fd > 0) {
-    close(fd->fd);
-  }
+    if (fd->fd > 0) {
+        close(fd->fd);
+    }
 
-    cycle_buffer_destroy(&fd->cycle);
+    // cycle_buffer_destroy(&fd->cycle);
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     return 0;
 }
-
+#if 0
 // large file we use seperate thread download
 // care that we do not support random read, only support stream read from head
 void *_tcloud_drive_read_routin(void *arg) {
@@ -902,7 +918,8 @@ void *_tcloud_drive_read_routin(void *arg) {
 
     return NULL;
 }
-#if 1
+#endif
+#if 0
 size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, off_t offset) {
     size_t result = 0;
     if (!fd) return -1;
@@ -952,7 +969,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 }
 #endif
 
-#if 0
+#if 1
 size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, off_t offset) {
     size_t result = 0;
     if (!fd) return -1;
@@ -965,84 +982,94 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     // pthread_mutex_lock(&fd->mutex);
 
-    curl_easy_setopt(fd->curl, CURLOPT_WRITEDATA, &b);
-    unsigned int avai = 0;//cycle_buffer_data_size(fd->cycle);
+    // curl_easy_setopt(fd->curl, CURLOPT_WRITEDATA, &b);
+    unsigned int avai = 0;  // cycle_buffer_data_size(fd->cycle);
 
     HR_LOGD("%s(%d): ......fd:%p. offset:%ld, size:%ld. current buf offset:%ld, avai:%u\n", __FUNCTION__, __LINE__, fd, offset, size, fd->offset, avai);
     // offset is not in cached
     if (offset != fd->offset) {
-
-    HR_LOGD("%s(%d): .....offset not matched .!!!!!!!!!!!!!!!!!!!!!!!!!! mxpmxpmxpmxpmxp.fd:%p. offset:%ld, size:%ld. current buf offset:%ld, avai:%u\n", __FUNCTION__, __LINE__, fd, offset, size, fd->offset, avai);
-
+        HR_LOGD("%s(%d): .....offset not matched .!!!!!!!!!!!!!!!!!!!!!!!!!! mxpmxpmxpmxpmxp.fd:%p. offset:%ld, size:%ld. current buf offset:%ld, avai:%u\n", __FUNCTION__, __LINE__, fd, offset, size, fd->offset, avai);
     }
     // if (offset != fd->offset || avai == 0) {
-        // we should reset, and request new data
-        int still_running = 0;
-        // cycle_buffer_reset(fd->cycle);
-        // fd->offset = offset;
-        char range[64] = {0};
-        snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size);
-        curl_easy_setopt(fd->curl, CURLOPT_RANGE, range);
-        do {
-            int numfds;
-            CURLMcode mc = curl_multi_wait(fd->multi, NULL, 0, 1000, &numfds);
-            // HR_LOGD("%s(%d): wait end... still_running:%d, numfds:%d\n", __FUNCTION__, __LINE__, still_running, numfds);
-            if (mc) {
-                fprintf(stderr, "curl_multi_poll() failed, code %d.\n", (int)mc);
-                break;
-            }
+    // we should reset, and request new data
+    int still_running = 0;
+    // cycle_buffer_reset(fd->cycle);
+    // fd->offset = offset;
+    char range[64] = {0};
+    snprintf(range, sizeof(range), "%zu-", offset);
+    curl_easy_setopt(fd->curl, CURLOPT_RANGE, range);
+    if (fd->paused) {
+        HR_LOGD("%s(%d): .....resume!!!!!!!!!!!!!!!!!!!!!!!!!! mxpmxpmxpmxpmxp.fd:%p. offset:%ld, size:%ld. current buf offset:%ld, avai:%u\n", __FUNCTION__, __LINE__, fd, offset, size, fd->offset, avai);
+        curl_easy_pause(fd->curl, CURLPAUSE_ALL);
+        fd->paused = 0;
+    }
 
-            mc = curl_multi_perform(fd->multi, &still_running);
-            // HR_LOGD("%s(%d): mc:%d, still_running:%d\n", __FUNCTION__, __LINE__, mc, still_running);
-            if (mc != CURLM_OK) {
-                HR_LOGD("%s(%d): mc:%d, still_running:%d.... failed!!!!!!!!!\n", __FUNCTION__, __LINE__, mc, still_running);
-                break;
-            }
+    do {
+        int numfds;
+        CURLMcode mc = curl_multi_wait(fd->multi, NULL, 0, 1000, &numfds);
+        // HR_LOGD("%s(%d): wait end... still_running:%d, numfds:%d\n", __FUNCTION__, __LINE__, still_running, numfds);
+        if (mc) {
+            fprintf(stderr, "curl_multi_poll() failed, code %d.\n", (int)mc);
+            break;
+        }
 
-            int msgq = 0;
-            struct CURLMsg *m = curl_multi_info_read(fd->multi, &msgq);
-            if (m && m->msg == CURLMSG_DONE) {
-                HR_LOGD("%s(%d):  read complete ................. total:%ld\n", __FUNCTION__, __LINE__, cycle_total);
-                break;
-            }
-            // if (!mc && still_running)
-            //    HR_LOGD("%s(%d): wait ... still_running:%d\n", __FUNCTION__, __LINE__, still_running);
+        mc = curl_multi_perform(fd->multi, &still_running);
+        // HR_LOGD("%s(%d): mc:%d, still_running:%d\n", __FUNCTION__, __LINE__, mc, still_running);
+        if (mc != CURLM_OK) {
+            HR_LOGD("%s(%d): mc:%d, still_running:%d.... failed!!!!!!!!!\n", __FUNCTION__, __LINE__, mc, still_running);
+            break;
+        }
 
-            // HR_LOGD("%s(%d):  total:%ld\n", __FUNCTION__, __LINE__, cycle_total);
-            if (still_running == 0) {
-                printf("mxppppppppppppppppppppppppppppppppppppppppppppp\n");
-                // sleep(1);
-                // still_running = 1;
-            }
-            avai = b.offset;//cycle_buffer_data_size(fd->cycle);
-            if (avai > size) {
-                printf("data enough, break; mxppppppppppppppppppppppppppppppppppppppppppppp\n");
-                break;
-            }
+        int msgq = 0;
+        struct CURLMsg *m = curl_multi_info_read(fd->multi, &msgq);
+        if (m && m->msg == CURLMSG_DONE) {
+            HR_LOGD("%s(%d):  read complete ................. total:%ld\n", __FUNCTION__, __LINE__, cycle_total);
+            break;
+        }
 
-            if (_pause) break;
+        if (fd->paused) {
+            HR_LOGD("%s(%d):  ...buffer maybe full break.............. total:%ld\n", __FUNCTION__, __LINE__, cycle_total);
+            break;
+        }
+        // if (!mc && still_running)
+        //    HR_LOGD("%s(%d): wait ... still_running:%d\n", __FUNCTION__, __LINE__, still_running);
 
-            // curl_easy_pause(fd->curl, CURLPAUSE_CONT);
-            /* if there are still transfers, loop! */
-        } while (still_running);
+        // HR_LOGD("%s(%d):  total:%ld\n", __FUNCTION__, __LINE__, cycle_total);
+        if (still_running == 0) {
+            printf("mxppppppppppppppppppppppppppppppppppppppppppppp\n");
+            // sleep(1);
+            // still_running = 1;
+        }
+        avai = b.offset;  // cycle_buffer_data_size(fd->cycle);
+        if (avai > size) {
+            printf("data enough, break; mxppppppppppppppppppppppppppppppppppppppppppppp\n");
+            // break;
+        }
 
-        // curl_easy_setopt(fd->curl, CURLOPT_RANGE, NULL);
+        // if (_pause) break;
+
+        // curl_easy_pause(fd->curl, CURLPAUSE_CONT);
+        /* if there are still transfers, loop! */
+    } while (still_running);
+
+    // curl_easy_setopt(fd->curl, CURLOPT_RANGE, NULL);
     //}
 
-    //result = cycle_buffer_get(fd->cycle, (unsigned char *)rbuf, size);
-    //fd->offset += result;
+    // result = cycle_buffer_get(fd->cycle, (unsigned char *)rbuf, size);
+    // fd->offset += result;
 
     //  pthread_mutex_unlock(&fd->mutex);
     HR_LOGD("%s(%d): ........read:%ld, now offset:%u\n", __FUNCTION__, __LINE__, result, fd->offset);
 
-    result = b.offset;
-    tcloud_buffer_free(&b);
-
-    if (_pause) {
+    result = fd->data.offset;
+    // tcloud_buffer_free(&b);
+    size = MIN(size, fd->data.offset);
+    memcpy(rbuf, fd->data.data, size);
+    //if (_pause) {
         // curl_easy_pause(fd->curl, CURLPAUSE_CONT);
-        _pause = 0;
-    }
-    return result;
+    //    _pause = 0;
+    //}
+    return size;
 }
 #endif
 static int tcloud_drive_write(const char *path, const char *wbuf, size_t size,
