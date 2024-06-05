@@ -145,6 +145,11 @@ static void deallocate_node(struct tcloudfs_node *node) {
     free(node->name);
     hr_list_del(&node->entry);
 
+    if (node->data) {
+        tcloud_buffer_free(node->data);
+        free(node->data);
+    }
+
     // 4. free self memory
     free(node);
 }
@@ -319,23 +324,23 @@ static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     // tcloud_drive_init();
 
     printf("%s(%d): .........priv:%p,   conn:%p, capab:0x%X\n", __FUNCTION__, __LINE__, priv, conn, conn->capable);
-    conn->max_read = 1024 *1024 * 2;
+    // conn->max_read = 1024 *1024 * 2;
     printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
-    
+
     if (conn->capable & FUSE_CAP_ASYNC_READ) {
         printf("drop : FUSE_CAP_ASYNC_READ\n");
         // conn->capable &= ~FUSE_CAP_ASYNC_READ;
     }
-    
+
     conn->want &= ~FUSE_CAP_ASYNC_READ;
-    conn->want &= ~FUSE_CAP_SPLICE_READ;   
+    conn->want &= ~FUSE_CAP_SPLICE_READ;
     conn->want &= ~FUSE_CAP_SPLICE_WRITE;
     conn->want &= ~FUSE_CAP_SPLICE_MOVE;
     conn->want &= ~FUSE_CAP_EXPORT_SUPPORT;
     conn->want &= ~FUSE_CAP_IOCTL_DIR;
 
-   conn->want &= ~FUSE_CAP_ASYNC_DIO; 
-    
+    conn->want &= ~FUSE_CAP_ASYNC_DIO;
+
     conn->want &= ~FUSE_CAP_SETXATTR_EXT;
 }
 
@@ -643,7 +648,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     if (!node->data) {
         node->data =
             (struct tcloud_buffer *)calloc(1, sizeof(struct tcloud_buffer));
-        tcloud_buffer_alloc(node->data, size);
+        tcloud_buffer_alloc(node->data, 512);
         node->offset = 0;
 
         // cache timing ?
@@ -674,6 +679,9 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
             st.st_mode = p->mode /*S_IFDIR*/;
             st.st_ino = (fuse_ino_t)p;
             entlen = fuse_add_direntry(req, NULL, 0, p->name, NULL, 0);
+            if (node->data->offset + entlen > node->data->size) {
+                tcloud_buffer_realloc(node->data, node->data->size + entlen + 256);
+            }
             entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
                                        (node->data->size - node->data->offset),
                                        p->name, &st, node->data->offset + entlen);
@@ -903,7 +911,7 @@ static void tcloudfs_release(fuse_req_t req, fuse_ino_t ino,
 
 void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
                    struct fuse_file_info *fi) {
-     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
+    printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
@@ -1077,7 +1085,8 @@ static void tcloudfs_statfs(fuse_req_t req, fuse_ino_t ino) {
     st.f_namemax = 255;
     st.f_bsize = 4096;
     time_t now = time(NULL);
-    if (now < priv->st.last_time + 60) {
+
+    if (now > priv->st.last_time + 60) {
         if (0 == tcloud_drive_storage_statfs(&priv->st.st)) {
             priv->st.last_time = now;
         }
@@ -1124,22 +1133,7 @@ int main(int argc, char **argv) {
     struct fuse_cmdline_opts opts;
     struct fuse_loop_config *config;
     memset((void *)&_priv, 0, sizeof(_priv));
-#if 0
-    printf("%s(%d): ....args->argv:%p....argc:%d, allacate:%d....\n", __FUNCTION__, __LINE__, args.argv, args.argc, args.allocated);
-    fuse_opt_add_arg(&args, "-s");
-    printf("%s(%d): ....args->argv:%p....argc:%d, allacate:%d....\n", __FUNCTION__, __LINE__, args.argv, args.argc, args.allocated);
-    printf("%s(%d): ............\n", __FUNCTION__, __LINE__);
-    fuse_opt_add_arg(&args, "-o");
-    printf("%s(%d): ....args->argv:%p....argc:%d, allacate:%d....\n", __FUNCTION__, __LINE__, args.argv, args.argc, args.allocated);
-    printf("%s(%d): ............\n", __FUNCTION__, __LINE__);
-    fuse_opt_add_arg(&args, "default_permissions");
-    printf("%s(%d): ............\n", __FUNCTION__, __LINE__);
-    fuse_opt_add_arg(&args, "-o");
-    printf("%s(%d): ............\n", __FUNCTION__, __LINE__);
-    fuse_opt_add_arg(&args, "max_read=4194304");
-    printf("%s(%d): ............\n", __FUNCTION__, __LINE__);
-#endif
-    // return 0;
+
     pthread_mutex_init(&_priv.mutex, NULL);
 
     // init empty link
@@ -1152,7 +1146,6 @@ int main(int argc, char **argv) {
     root->mode = S_IFDIR | TCLOUDFS_DEFAULT_MODE;
 
     tcloud_drive_getattr(root->cloud_id, 0 /*folder*/, &root->atime, &root->ctime);
-    
 
     root->mtime = root->atime;
     hr_list_add_tail(&root->entry, &_priv.head);
@@ -1184,15 +1177,24 @@ int main(int argc, char **argv) {
         config = NULL;
     }
 
+    printf("%s(%d) unmount .....\n", __FUNCTION__, __LINE__);
     fuse_session_unmount(se);
 gone_3:
     fuse_remove_signal_handlers(se);
 gone_2:
     fuse_session_destroy(se);
 gone_1:
+    deallocate_node(root);
+    tcloud_drive_destroy();
+
     if (opts.mountpoint)
         free(opts.mountpoint);
     fuse_opt_free_args(&args);
     pthread_mutex_destroy(&_priv.mutex);
+
+    usleep(1000 * 1000);
+
+    fprintf(stderr, "press any char continue ...\n");
+    getchar();
     return 0;
 }

@@ -421,9 +421,11 @@ static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri,
     char date[64] = {0};
     tcloud_utils_http_date_string(date, sizeof(date));
 
+    req->set_header(req, "Accept", "application/json;charset=UTF-8");
     req->set_header(req, "Date", date);
     req->set_header(req, "SessionKey", session_key);
     req->set_header(req, "X-Request-ID", uuid);
+
 
     char *signature_data = NULL;
     if (params) {
@@ -479,7 +481,7 @@ int tcloud_drive_storage_statfs(struct statvfs *st) {
         return ret;
     }
 
-    req->get(req, action, &b, NULL);
+    req->get(req, API_URL "/getUserInfo.action", &b, NULL);
 
     printf("data:%s\n", b.data);
     root = json_tokener_parse(b.data);
@@ -530,10 +532,7 @@ int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct ti
     asprintf(&url, API_URL "%s?folderId=%ld", action, id);
     if (!url) return -1;
 
-    req->set_header(req, "Accept", "application/json;charset=UTF-8");
     int ret = _tcloud_drive_fill_final(req, action, NULL);
-
-    HR_LOGD("%s(%d): failed ..........ret:%d...\n", __FUNCTION__, __LINE__, ret);
     if (ret != 0) {
         tcloud_buffer_free(&b);
         return ret;
@@ -619,7 +618,6 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
 
     printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
 
-    req->set_header(req, "Accept", "application/json;charset=UTF-8");
     ret = req->request(req, url, &b, NULL);
     free(url);
     printf("%s(%d): ...ret:%d.......\n", __FUNCTION__, __LINE__, ret);
@@ -666,7 +664,6 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
 
     tcloud_buffer_alloc(&b, 512);
     req->method = TR_METHOD_GET;
-    req->set_header(req, "Accept", "application/json;charset=UTF-8");
     int ret = _tcloud_drive_fill_final(req, action, NULL);
     if (ret != 0) {
         tcloud_buffer_free(&b);
@@ -750,7 +747,6 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
 
     tcloud_buffer_alloc(&b, 512);
     req->method = TR_METHOD_GET;
-    req->set_header(req, "Accept", "application/json;charset=UTF-8");
     ret = _tcloud_drive_fill_final(req, action, NULL);
     if (ret != 0) {
         tcloud_buffer_free(&b);
@@ -803,13 +799,16 @@ int tcloud_drive_release(struct tcloud_drive_fd *fd) {
     pthread_mutex_destroy(&fd->mutex);
     curl_multi_remove_handle(fd->multi, fd->curl);
     curl_easy_cleanup(fd->curl);
-    curl_multi_cleanup(fd->curl);
+    curl_multi_cleanup(fd->multi);
 
-    // if (fd->fd > 0) {
-    //    close(fd->fd);
-    //}
+    if (fd->url) {
+      free(fd->url);
+    }
 
     tcloud_buffer_free(&fd->cache);
+  
+    // final free self
+    free(fd);
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     return 0;
 }

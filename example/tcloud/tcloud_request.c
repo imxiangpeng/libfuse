@@ -28,7 +28,6 @@ struct tcloud_request_priv {
     struct hr_list_head query;
     struct hr_list_head form;
     struct curl_slist *headers;
-    char *effect_url;
     // char *url
     // char url[];  // input url is appended end
 };
@@ -175,16 +174,14 @@ static int _http_request(struct tcloud_request *req, const char *url, struct tcl
 
     if (rc != CURLE_OK) {
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rc));
+        fprintf(stderr, "curl_easy_perform() url: %s\n", url);
         return -1;
     }
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
     curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &redirect_url);
     curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &redirect_url);
     if (redirect_url != NULL) {
-        priv->effect_url = strdup(redirect_url);
     }
-    printf("code:%d, response code:%ld\n", CURLE_OK, response_code);
-    printf("code:%d, redirect url:%s\n", CURLE_OK, redirect_url);
 
     // clean memory, because we may use this socket to other request
 
@@ -251,10 +248,6 @@ void tcloud_request_free(struct tcloud_request *req) {
     if (priv->curl) {
         curl_easy_cleanup(priv->curl);
         priv->curl = NULL;
-    }
-
-    if (priv->effect_url) {
-        free(priv->effect_url);
     }
 
     if (priv->headers) {
