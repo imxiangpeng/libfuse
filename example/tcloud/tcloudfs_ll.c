@@ -319,7 +319,7 @@ static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
     // tcloud_drive_init();
 
     printf("%s(%d): .........priv:%p,   conn:%p, capab:0x%X\n", __FUNCTION__, __LINE__, priv, conn, conn->capable);
-    // conn->max_read = 1024 *1024 *1024;
+    conn->max_read = 1024 *1024 * 2;
     printf("%s(%d): .........priv:%p,   conn:%p\n", __FUNCTION__, __LINE__, priv, conn);
     
     if (conn->capable & FUSE_CAP_ASYNC_READ) {
@@ -981,7 +981,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     // *ptr = 'm';
     // *(ptr + 1) = 'x';
     // *(ptr + 2) = 'x';
-    if (size + off < node->size) {
+    if (size + off <= node->size) {
         fuse_reply_buf(req, ptr /*+ off*/, size);
     } else {
         fuse_reply_err(req, 0);
