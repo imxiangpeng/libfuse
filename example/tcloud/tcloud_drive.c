@@ -508,6 +508,8 @@ int tcloud_drive_storage_statfs(struct statvfs *st) {
     printf("%s(%d): .capability:%ld, available:%ld-%ld....\n", __FUNCTION__, __LINE__, st->f_blocks * 4096, st->f_bfree, st->f_bavail);
     json_object_put(root);
     root = NULL;
+  
+    return 0;
 }
 
 // id: file or folder id
@@ -785,7 +787,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
             curl_easy_setopt(fd->curl, CURLOPT_FOLLOWLOCATION, 1);
             // curl_easy_setopt(fd->curl, CURLOPT_BUFFERSIZE, TCLOUD_DRIVE_READ_BUFFER_SIZE / 2);
         }
-        // printf("%s(%d): ..fd:%p..download url:%s....\n", __FUNCTION__, __LINE__, fd, json_object_get_string(download_url));
+        printf("%s(%d): ..fd:%p..download url:%s....\n", __FUNCTION__, __LINE__, fd, json_object_get_string(download_url));
         json_object_put(root);
         root = NULL;
     }
@@ -793,6 +795,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
     return fd;
 }
 int tcloud_drive_release(struct tcloud_drive_fd *fd) {
+    printf("%s(%d): .....release :%p...\n", __FUNCTION__, __LINE__, fd);
     if (!fd) return -1;
     printf("%s(%d): .....release :%p...\n", __FUNCTION__, __LINE__, fd);
 
@@ -817,7 +820,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     int still_running = 0;
 
     if (!fd) return -1;
-    // HR_LOGD("%s(%d): ......fd:%p. offset:%ld, size:%ld.\n", __FUNCTION__, __LINE__, fd, offset, size);
+    HR_LOGD("%s(%d): ......fd:%p. offset:%ld, size:%ld.\n", __FUNCTION__, __LINE__, fd, offset, size);
 
     // offset is not in cached
     if (offset != fd->offset) {
@@ -878,15 +881,16 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
             break;
         }
 
+        // download paused, buffer maybe full, we should read directly ...
+        if (fd->paused) {
+            break;
+        }
+
         // data available/enough, return now
         if (fd->cache.offset >= size) {
             break;
         }
 
-        // download paused, buffer maybe full, we should read directly ...
-        if (fd->paused) {
-            break;
-        }
     } while (still_running);
 
     size = MIN(size, fd->cache.offset);
@@ -898,6 +902,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     fd->offset += size;
     pthread_mutex_unlock(&fd->mutex);
+    HR_LOGD("%s(%d): ....out .....fd:%p. offset:%ld, size:%ld.\n", __FUNCTION__, __LINE__, fd, offset, size);
     return size;
 }
 
