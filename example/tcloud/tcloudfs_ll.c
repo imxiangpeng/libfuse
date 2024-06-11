@@ -1146,6 +1146,8 @@ void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 }
 
 #if 1
+static int _write_fd = -1;
+static size_t _offset = 0;
 static void tcloudfs_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufvec *in_buf,
                                off_t off, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
@@ -1193,6 +1195,19 @@ static void tcloudfs_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufve
     else
         fuse_reply_write(req, (size_t)res);
 
+    if (_write_fd == -1) {
+        char path[256] = { 0 };
+        snprintf(path, sizeof(path), "/home/alex/workspace/workspace/libfuse/libfuse/build/dump.write.%ld", time(NULL));
+        _write_fd = open(path, O_CREAT | O_RDWR, 755);
+    }
+    
+    if (_write_fd > 0) {
+        if (off != _offset) {
+            HR_LOGD("%s(%d): @@@@@@@@@@@@@@@@@@@@@@@@@ offset not matched! %ld vs %ld\n", __FUNCTION__, __LINE__, off, _offset);
+        }
+        write(_write_fd, out_buf.buf[0].mem, size);
+        _offset = off + size;
+    }
     free(out_buf.buf[0].mem);
 }
 #endif
