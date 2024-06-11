@@ -3,6 +3,7 @@
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include "hr_log.h"
 #endif
 
 #include "tcloud_request.h"
@@ -10,6 +11,7 @@
 #include <curl/curl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "hr_list.h"
 #include "tcloud_buffer.h"
@@ -30,8 +32,97 @@ struct tcloud_request_priv {
     struct curl_slist *headers;
     // char *url
     // char url[];  // input url is appended end
+
+    struct hr_list_head pool_entry;  // can be attached to pool
 };
 
+struct tcloud_request_pool_priv {
+    struct tcloud_request_pool pool;
+
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    struct hr_list_head head;
+};
+
+static struct tcloud_request *tcloud_request_pool_acquire(struct tcloud_request_pool *self) {
+    struct tcloud_request_priv *req = NULL;
+    struct tcloud_request_pool_priv *priv = (struct tcloud_request_pool_priv *)self;
+
+    if (!priv) {
+        return NULL;
+    }
+
+    HR_LOGD("%s(%d): acquire..............\n", __FUNCTION__, __LINE__);
+    pthread_mutex_lock(&priv->lock);
+
+    if (hr_list_empty(&priv->head)) {
+        HR_LOGD("%s(%d): no available wait ..............\n", __FUNCTION__, __LINE__);
+        // no available, wait available
+        pthread_cond_wait(&priv->cond, &priv->lock);
+        HR_LOGD("%s(%d): available wait completed ..............\n", __FUNCTION__, __LINE__);
+    }
+
+    req = hr_list_first_entry(&priv->head, struct tcloud_request_priv, pool_entry);
+
+    // take off from list
+    hr_list_del(&req->pool_entry);
+
+    pthread_mutex_unlock(&priv->lock);
+
+    HR_LOGD("%s(%d): acquire....%p..........\n", __FUNCTION__, __LINE__, &req->request);
+    return &req->request;
+}
+static void tcloud_request_pool_release(struct tcloud_request_pool *self, struct tcloud_request *req) {
+    struct tcloud_request_pool_priv *priv = (struct tcloud_request_pool_priv *)self;
+
+    if (!priv || !req) {
+        return;
+    }
+    HR_LOGD("%s(%d): release ........req:%p......\n", __FUNCTION__, __LINE__, req);
+    pthread_mutex_lock(&priv->lock);
+    hr_list_add_tail(&((struct tcloud_request_priv *)req)->pool_entry, &priv->head);
+    pthread_mutex_unlock(&priv->lock);
+    pthread_cond_signal(&priv->cond);
+}
+struct tcloud_request_pool *tcloud_request_pool_create(int max) {
+    struct tcloud_request_pool_priv *priv = (struct tcloud_request_pool_priv *)calloc(1, sizeof(struct tcloud_request_pool_priv));
+    if (!priv) {
+        // no memory
+        return NULL;
+    }
+
+    pthread_mutex_init(&priv->lock, NULL);
+    pthread_cond_init(&priv->cond, NULL);
+
+    HR_INIT_LIST_HEAD(&priv->head);
+
+    for (int i = 0; i < max; i++) {
+        struct tcloud_request_priv *req = (struct tcloud_request_priv *)tcloud_request_new();
+        hr_list_add_tail( &req->pool_entry, &priv->head);
+    }
+
+    priv->pool.acquire = tcloud_request_pool_acquire;
+    priv->pool.release = tcloud_request_pool_release;
+    return &priv->pool;
+}
+void tcloud_request_pool_destroy(struct tcloud_request_pool *self) {
+    struct tcloud_request_priv *n, *p;
+    struct tcloud_request_pool_priv *priv = (struct tcloud_request_pool_priv *)self;
+
+    if (!priv) {
+        return;
+    }
+
+    HR_LOGD("%s(%d): ..........\n", __FUNCTION__, __LINE__);
+    hr_list_for_each_entry_safe(p, n, &priv->head, pool_entry) {
+        hr_list_del(&p->pool_entry);
+        tcloud_request_free((struct tcloud_request *)p);
+    }
+
+    HR_INIT_LIST_HEAD(&priv->head);
+
+    free(priv);
+}
 static int _set_query(struct tcloud_request *req, const char *name, const char *val) {
     struct tcloud_param *param = NULL;
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
@@ -237,6 +328,9 @@ struct tcloud_request *tcloud_request_new(void) {
     priv->headers = NULL;
     HR_INIT_LIST_HEAD(&priv->query);
     HR_INIT_LIST_HEAD(&priv->form);
+
+    // init for pool
+    HR_INIT_LIST_HEAD(&priv->pool_entry);
     return (struct tcloud_request *)priv;
 }
 
@@ -245,6 +339,7 @@ void tcloud_request_free(struct tcloud_request *req) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
     if (!req) return;
 
+    // you should not release, when it's attached on one pool
     if (priv->curl) {
         curl_easy_cleanup(priv->curl);
         priv->curl = NULL;
@@ -267,5 +362,6 @@ void tcloud_request_free(struct tcloud_request *req) {
         free(p);
     }
 
+    HR_INIT_LIST_HEAD(&priv->pool_entry);
     free(priv);
 }

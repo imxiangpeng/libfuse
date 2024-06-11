@@ -751,9 +751,13 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     if (size > total - offset) {
         size = total - offset;
     }
-    // printf("%s(%d): total:%ld, offset:%ld, size:%ld..........\n", __FUNCTION__,
-    //       __LINE__, total, offset, size);
+    // printf("%s(%d): total:%ld, offset:%ld, size:%ld.....buffer.size:%ld.....\n", __FUNCTION__,
+    //        __LINE__, total, offset, size, node->data->size);
+    // we should allocate new memory to reply
+    // void *mm = malloc(size);
+    // memcpy(mm, node->data->data + offset, size);
     fuse_reply_buf(req, node->data->data + offset, size);
+    //fuse_reply_buf(req, mm, size);
     node->offset = offset + size;
     // printf("%s(%d): now offset:%ld, buffer %ld vs %ld..........\n", __FUNCTION__,
     //        __LINE__, node->offset, node->data->offset, node->data->size);
@@ -1197,8 +1201,8 @@ static void tcloudfs_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufve
 
     if (_write_fd == -1) {
         char path[256] = { 0 };
-        snprintf(path, sizeof(path), "/home/alex/workspace/workspace/libfuse/libfuse/build/dump.write.%ld", time(NULL));
-        _write_fd = open(path, O_CREAT | O_RDWR, 755);
+        snprintf(path, sizeof(path), "/home/alex/workspace/workspace/libfuse/libfuse/build/dump.write.bin");
+        _write_fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0755);
     }
     
     if (_write_fd > 0) {

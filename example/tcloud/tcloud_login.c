@@ -338,6 +338,9 @@ int web_initmulti() {
     return 0;
 }
 
+int request_pool_test(void) {
+    //struct tcloud_request_pool* pool = tcloud_request_poll_create(3);
+}
 int main(int argc, char **argv) {
     web_initmulti();
 

@@ -21,7 +21,7 @@ int tcloud_buffer_alloc(struct tcloud_buffer *buf, size_t size) {
         printf("%s(%d): can not allocate memory ...\n", __FUNCTION__, __LINE__);
         return -1;
     }
-    // buf->preallocated = 0;
+    buf->preallocated = 0;
 
     return 0;
 }
