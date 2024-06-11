@@ -63,8 +63,8 @@
 
 #define TCLOUD_DRIVE_READ_BUFFER_SIZE (2 * 1024 * 1024)
 
-const char *secret = "A8CD8047724920AC491C30F01EEDF6F3";
-const char *session_key = "a947ec7d-0ebf-4835-bc8d-0fb75853d3c5";
+const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
+const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
 
 struct tcloud_drive {
     struct tcloud_request *request;  // api request
