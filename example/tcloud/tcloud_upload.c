@@ -247,9 +247,9 @@ static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri,
         struct tcloud_buffer r;
         tcloud_buffer_alloc(&r, 512);
         printf("raw params:%s\n", params->data);
-        int rc = tcloud_utils_aes_ecb_data((unsigned char*)secret, params->data, params->offset, &r);
-            // int rc = tcloud_utils_rsa_encrypt(aes_public, params->data, params->offset, tmp, &rsa_len);
-            printf("aes enc result:%d, result:%ld\n", rc, r.offset);
+        int rc = tcloud_utils_aes_ecb_data((unsigned char *)secret, params->data, params->offset, &r);
+        // int rc = tcloud_utils_rsa_encrypt(aes_public, params->data, params->offset, tmp, &rsa_len);
+        printf("aes enc result:%d, result:%ld\n", rc, r.offset);
 
         params_query = hex_to_string(r.data, r.offset);
         printf("encryption text:%s\n", params_query);
@@ -319,7 +319,6 @@ int init_multi_upload(uint64_t parent_id, const char *name, size_t size) {
 
     tcloud_request_free(req);
 
-
     struct json_object *root = NULL, *code = NULL, *result_data = NULL;
     root = json_tokener_parse(b.data);
     tcloud_buffer_free(&b);
@@ -338,20 +337,24 @@ int init_multi_upload(uint64_t parent_id, const char *name, size_t size) {
         json_object_put(root);
         return -1;
     }
-    
-    struct json_object *json_upload_type= NULL, *json_upload_host = NULL, *json_upload_file_id = NULL, *json_file_data_exists = NULL;
+
+    struct json_object *json_upload_type = NULL, *json_upload_host = NULL, *json_upload_file_id = NULL, *json_file_data_exists = NULL;
     json_object_object_get_ex(result_data, "uploadType", &json_upload_type);
     json_object_object_get_ex(result_data, "uploadHost", &json_upload_host);
     json_object_object_get_ex(result_data, "uploadFileId", &json_upload_file_id);
     json_object_object_get_ex(result_data, "fileDataExists", &json_file_data_exists);
-    
-    HR_LOGD("%s(%d): .uploadType:%d, uploadHost:%s, uploadFileId:%s, fileDataExists:%d...\n", __FUNCTION__, __LINE__, 
-    json_object_get_int(json_upload_type), 
-    json_object_get_string(json_upload_host),
-    json_object_get_string(json_upload_file_id),
-    json_object_get_int(json_file_data_exists));
+
+    HR_LOGD("%s(%d): .uploadType:%d, uploadHost:%s, uploadFileId:%s, fileDataExists:%d...\n", __FUNCTION__, __LINE__,
+            json_object_get_int(json_upload_type),
+            json_object_get_string(json_upload_host),
+            json_object_get_string(json_upload_file_id),
+            json_object_get_int(json_file_data_exists));
+    json_object_put(root);
 
     return 0;
+}
+
+int get_multi_upload() {
 }
 int main(int argc, char **argv) {
     if (argc < 2) {
