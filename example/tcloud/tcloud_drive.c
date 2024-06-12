@@ -1,5 +1,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <ctype.h>
 #include <curl/multi.h>
 #include <fcntl.h>
@@ -7,7 +8,6 @@
 #include <unistd.h>
 #include "tcloud/tcloud_request.h"
 #include "tcloud_utils.h"
-#endif
 
 #include <json-c/json.h>
 #include <json-c/json_object.h>
@@ -66,8 +66,11 @@
 
 #define TCLOUD_REQUEST_POOL_SIZE (2)
 
-const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
-const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
+// const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
+// const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
+
+const char *secret = "705DD28638B377C924486C7132D4AB9A";
+const char *session_key = "ce152573-2cc1-4438-a3db-efe63a43993c";
 
 struct tcloud_drive {
     struct tcloud_request_pool *request_pool;  // api request pool
@@ -447,7 +450,7 @@ static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri,
 
     req->set_query(req, "clientType", "TELEPC");
     req->set_query(req, "version", "6.2");
-    req->set_query(req, "channelI", "web_cloud.189.cn");
+    req->set_query(req, "channelId", "web_cloud.189.cn");
     snprintf(tmp, sizeof(tmp), "%d_%d", rand(), rand());
     req->set_query(req, "rand", tmp);
 
