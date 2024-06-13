@@ -105,11 +105,10 @@ struct init_multi_upload_data {
     int exists;
 };
 
-struct multi_upload_urls_resp{
+struct multi_upload_urls_resp {
     char *url;
     char *header;
 };
-
 
 static pthread_t _tid = 0;
 
@@ -628,39 +627,106 @@ int get_multi_upload_urls(const char *id, int part, const char *md5, struct mult
         return -1;
     }
 
-    struct json_object *json_upload_urls= NULL;
+    struct json_object *json_upload_urls = NULL;
     json_object_object_get_ex(root, "uploadUrls", &json_upload_urls);
-    
+
     const char *part_number_prefix = "partNumber_";
     json_object_object_foreach(json_upload_urls, key, val) {
-       if (!strncmp(key, part_number_prefix, strlen(part_number_prefix))){
-            res->url = strdup(json_object_get_string(val));
-       } else if (!strcmp(key, "RequestHeader")){
-            res->header = strdup(json_object_get_string(val));
-       }
-    
+        printf("keys:%s\n", key);
+        if (!strncmp(key, part_number_prefix, strlen(part_number_prefix))) {
+            res->url = strdup(json_object_get_string(json_object_object_get(val, "requestURL")));
+            res->header = strdup(json_object_get_string(json_object_object_get(val, "requestHeader")));
+            break;
+        }
     }
     json_object_put(root);
-        
-    
 
     return 0;
 }
 
+static size_t _read_callback(void *ptr, size_t size, size_t nmemb, void *userdata) {
+    int rs = 0;
+    struct upload_queue *upload = (struct upload_queue *)userdata;
+    // always return one chunk
+
+    // HR_LOGD("%s(%d): read data :%ld\n", __FUNCTION__, __LINE__, size * nmemb);
+    if (hr_list_empty(&upload->head)) {
+        return 0;
+    }
+
+    struct write_chunk *ch = hr_list_first_entry(&upload->head, struct write_chunk, entry);
+    rs = ch->size;
+
+    // HR_LOGD("%s(%d): read data :%ld, current chunk:%ld\n", __FUNCTION__, __LINE__,  size * nmemb, ch->size);
+    if (rs <= size * nmemb) {
+        memcpy(ptr, ch->payload, rs);
+        hr_list_del(&ch->entry);
+        // free ch
+        return rs;
+    }
+    rs = size * nmemb;
+    memcpy(ptr, ch->payload, rs);
+    ch->offset += rs;
+    ch->size -= rs;
+    memcpy(ch->payload, ch->payload + rs, ch->size);
+    // HR_LOGD("%s(%d): split read data :%ld, current chunk:%ld, real read:%ld\n", __FUNCTION__, __LINE__,  size * nmemb, ch->size, rs);
+    // leave it later delete
+    return rs;
+}
+
 static int do_stream_upload(struct upload_queue *upload) {
     struct multi_upload_urls_resp res;
+
+    struct tcloud_buffer b;
+    struct tcloud_request *req = tcloud_request_new();
+
+    tcloud_buffer_alloc(&b, 512);
     memset((void *)&res, 0, sizeof(res));
     HR_LOGD("%s(%d): upload id:%s, part:%d, md5sum:%s\n", __FUNCTION__, __LINE__, _queue.upload_id, upload->part, upload->md5sum);
     get_multi_upload_urls(_queue.upload_id, upload->part + 1, upload->md5sum, &res);
 
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
+
+    char *saveptr, *saveptr2;
+    char *token = strtok_r(res.header, "&", &saveptr);
+    while (token) {
+        char *name = strtok_r(token, "=", &saveptr2);
+        char *value = saveptr2;//strtok_r(saveptr2, "=", &saveptr2);
+        printf("name:%s, val:%s\n", name, value);
+
+        req->set_header(req, name, value);
+
+        token = strtok_r(saveptr, "&", &saveptr);
+    }
+
+    // const char* action = "";
+
+    // char *murl = "http://media-sdqd-fy-person.sdoss.ctyunxs.cn/PERSONCLOUD/ed44c77a-bd6b-4626-b24b-ba7a9b9f0a32.bin?partNumber=4&uploadId=2~X_FmL_9DbnyshsAAhiWB5y3pJ3-tXDH";
+    // murl = "https://media-sdqd-fy-person.sdoss.ctyunxs.cn/PERSONCLOUD/f26e5dfd-839f-4f5a-b972-17119dbb153b.bin?partNumber\u003d1\u0026uploadId\u003d2~SXhXmQoL_mMVAlbmM6DYbQB7fOWU13F";
     
+    if (strncmp(res.url, "https://", 8)) {
+        strcpy(res.url, res.url + 5);
+    }
+    HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
+    char tmp[128] = {0};
+    snprintf(tmp, sizeof(tmp), "%ld", upload->content_length);
+    req->set_header(req, "Content-Length", tmp);
+    req->put(req, res.url, &b, _read_callback, upload);
+
+    HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
+    printf("upload result:%s\n", b.data);
+
     if (res.url) {
         free(res.url);
     }
     if (res.header) {
         free(res.header);
     }
+    tcloud_request_free(req);
+    tcloud_buffer_free(&b);
+    
+
+    getchar();
     return 0;
 }
 
@@ -696,6 +762,7 @@ static int do_commit_upload(struct write_queue *queue) {
     printf("result:(%ld)%s\n", b.offset, b.data);
 
     tcloud_request_free(req);
+    tcloud_buffer_free(&b);
 }
 int main(int argc, char **argv) {
     if (argc < 2) {

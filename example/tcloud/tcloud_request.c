@@ -98,7 +98,7 @@ struct tcloud_request_pool *tcloud_request_pool_create(int max) {
 
     for (int i = 0; i < max; i++) {
         struct tcloud_request_priv *req = (struct tcloud_request_priv *)tcloud_request_new();
-        hr_list_add_tail( &req->pool_entry, &priv->head);
+        hr_list_add_tail(&req->pool_entry, &priv->head);
     }
 
     priv->pool.acquire = tcloud_request_pool_acquire;
@@ -305,6 +305,104 @@ static int _http_do_post(struct tcloud_request *req, const char *url, struct tcl
     req->method = TR_METHOD_POST;
     return req->request(req, url, b, h);
 }
+
+static int _http_do_put(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, size_t (*read_callback)(void *ptr, size_t size, size_t nmemb, void *userdata), void *args) {
+    struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
+    CURLcode rc;
+    CURL *curl = NULL;
+    CURLU *_curl = NULL;
+    long response_code = 0;
+    char *redirect_url = NULL;
+    struct tcloud_param *n, *p;
+    char *payload = NULL;
+
+    // b maybe null, when you do not care data
+    if (!req) return -1;
+
+    curl = priv->curl;
+    if (!curl) {
+        return -1;
+    }
+
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    if (hr_list_empty(&priv->query)) {
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    } else {
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+        _curl = curl_url();
+        curl_url_set(_curl, CURLUPART_URL, url, 0);
+        // release memory directly ...
+        // because request maybe reused!
+        hr_list_for_each_entry_safe(p, n, &priv->query, entry) {
+            curl_url_set(_curl, CURLUPART_QUERY, p->value, CURLU_APPENDQUERY);
+            if (p->value) free(p->value);
+            hr_list_del(&p->entry);
+            free(p);
+        }
+        curl_easy_setopt(curl, CURLOPT_CURLU, _curl);
+    }
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+
+    if (priv->headers)
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, priv->headers);
+
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, b);
+    if (!b) {
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
+    }
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+
+    curl_easy_setopt(curl, CURLOPT_PUT, 1L);
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+    curl_easy_setopt(curl, CURLOPT_READDATA, (void *)args);
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+
+    // follow redirect
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    rc = curl_easy_perform(curl);
+
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    if (payload) {
+        free(payload);
+    }
+
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    if (_curl) {
+        curl_url_cleanup(_curl);
+    }
+
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    if (rc != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rc));
+        fprintf(stderr, "curl_easy_perform() url: %s\n", url);
+        return -1;
+    }
+    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+    curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &redirect_url);
+    curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &redirect_url);
+    if (redirect_url != NULL) {
+    }
+
+    // clean memory, because we may use this socket to other request
+
+    if (priv->headers) {
+        curl_slist_free_all(priv->headers);
+        priv->headers = NULL;
+    }
+    hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
+        if (p->value) free(p->value);
+        hr_list_del(&p->entry);
+        free(p);
+    }
+
+    return 0;
+}
 struct tcloud_request *tcloud_request_new(void) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)calloc(1, sizeof(struct tcloud_request_priv));
 
@@ -323,6 +421,7 @@ struct tcloud_request *tcloud_request_new(void) {
     priv->request.allow_redirect = _allow_redirect;
     priv->request.get = _http_do_get;
     priv->request.post = _http_do_post;
+    priv->request.put = _http_do_put;
     priv->request.request = _http_request;
 
     priv->headers = NULL;
