@@ -1,9 +1,11 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
-#include <json-c/json.h>
-#include <json-c/json_object.h>
 #endif
 
+#include <json-c/json.h>
+#include <json-c/json_object.h>
+#include <sys/stat.h>
+#include <openssl/evp.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -27,6 +29,10 @@ const char *_user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 #define MAX_QUEUE (30)
 
 #define CHUNK_10M (1024 * 1024 * 10)
+
+#ifndef MD5_DIGEST_LENGTH
+#define MD5_DIGEST_LENGTH 16
+#endif
 
 struct {
     size_t slice_size;
@@ -60,8 +66,12 @@ int _fd = -1;
 struct write_queue {
     int seq;
 
-    CURLM *multi;
-    CURL *curl;  // opened handle
+    char *name;
+    size_t total_size;
+    char md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+    EVP_MD_CTX *mdctx;
+
+    char *upload_id;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     int num;
@@ -70,9 +80,30 @@ struct write_queue {
     struct hr_list_head head;
 } _queue;
 
+struct upload_queue {
+    int part;
+    char *url;
+    size_t content_length;
+    // md5
+    char md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+    EVP_MD_CTX *mdctx;
+    CURLM *multi;
+    CURL *curl;  // opened handle
+    struct hr_list_head head;
+} _upload_queue;
+
+struct init_multi_upload_data {
+    int type;
+    char *host;
+    char *id;
+    int exists;
+};
+
 static pthread_t _tid = 0;
 
 static int _dump_fd = -1;
+
+static int do_stream_upload(struct upload_queue *upload);
 
 void chunk_free(struct write_chunk *ch) {
     if (!ch) return;
@@ -94,6 +125,7 @@ static int open_chunk(int seq) {
 }
 static void *write_routin(void *arg) {
     while (1) {
+        int should_upload = 0;
         pthread_mutex_lock(&_queue.mutex);
         if (hr_list_empty(&_queue.head) || _queue.num == 0) {
             // we should wait
@@ -106,7 +138,18 @@ static void *write_routin(void *arg) {
             pthread_mutex_unlock(&_queue.mutex);
             continue;
         }
-        HR_LOGD("%s(%d): now request:%p -> %ld... num:%d\n", __FUNCTION__, __LINE__, ch, ch->offset, _queue.num);
+
+        if (_queue.processing_offset == 0) {
+            _queue.mdctx = EVP_MD_CTX_new();
+            EVP_DigestInit_ex(_queue.mdctx, EVP_md5(), NULL);
+        }
+
+        if (_queue.chunk_offset == 0) {
+            _upload_queue.mdctx = EVP_MD_CTX_new();
+            EVP_DigestInit_ex(_upload_queue.mdctx, EVP_md5(), NULL);
+        }
+
+        HR_LOGD("%s(%d): now request:%p -> %ld, wait _queue.processing_offset:%ld ... num:%d\n", __FUNCTION__, __LINE__, ch, ch->offset, _queue.processing_offset, _queue.num);
         if (_queue.processing_offset == ch->offset) {
             HR_LOGD("%s(%d): found chunk at %ld ...\n", __FUNCTION__, __LINE__, ch->offset);
             // take off from queue
@@ -115,29 +158,98 @@ static void *write_routin(void *arg) {
                 _dump_fd = open_chunk(_queue.seq);
             }
             // dump data every 10M
-            if (_queue.chunk_offset + ch->size <= CHUNK_SIZE) {
-                hr_list_del(&ch->entry);
-                _queue.num--;
+            if (_queue.chunk_offset + ch->size < CHUNK_SIZE) {
                 // continue this chunk
                 write(_dump_fd, ch->payload, ch->size);
+                EVP_DigestUpdate(_queue.mdctx, ch->payload, ch->size);
+                EVP_DigestUpdate(_upload_queue.mdctx, ch->payload, ch->size);
                 _queue.chunk_offset += ch->size;
                 _queue.processing_offset = ch->offset + ch->size;
-                chunk_free(ch);
+
+                hr_list_move_tail(&ch->entry, &_upload_queue.head);
+                _upload_queue.content_length += ch->size;
+                // hr_list_del(&ch->entry);
+                _queue.num--;
+                HR_LOGD("%s(%d): consume total chunk..... next offset:%ld\n", __FUNCTION__, __LINE__, _queue.processing_offset);
+
+                pthread_mutex_unlock(&_queue.mutex);
+                pthread_cond_signal(&_queue.cond);
+                continue;
             } else {
-                //
+                // we will fill one chunk and try to upload
                 size_t ws = CHUNK_SIZE - _queue.chunk_offset;
                 write(_dump_fd, ch->payload, ws);
+                EVP_DigestUpdate(_queue.mdctx, ch->payload, ws);
+                EVP_DigestUpdate(_upload_queue.mdctx, ch->payload, ws);
                 _queue.chunk_offset += ws;
                 _queue.processing_offset = ch->offset + ws;
+                _upload_queue.content_length += ws;
 
                 close(_dump_fd);
                 _dump_fd = -1;
                 // open new chunk
+                //_queue.seq++;
+                // ch->offset += ws;
+                // ch->size -= ws;
+
+                if (ch->size - ws > 0) {
+                    // split this chunk into two chunk
+                    struct write_chunk *c1 = (struct write_chunk *)calloc(1, sizeof(struct write_chunk));
+                    HR_INIT_LIST_HEAD(&c1->entry);
+
+                    c1->offset = ch->offset;
+                    c1->size = ws;
+                    c1->payload = calloc(1, ws);
+                    // copy data to new chunk
+                    memcpy(c1->payload, ch->payload, ws);
+                    // add data to upload queue
+                    hr_list_add_tail(&c1->entry, &_upload_queue.head);
+                    _upload_queue.content_length += ws;
+
+                    // keep ch in incoming queue
+                    ch->offset += ws;
+                    ch->size -= ws;
+                    // adjust left data to begin
+                    memcpy(ch->payload, ch->payload + ws, ch->size);
+                    
+                    HR_LOGD("%s(%d): split ..... next offset:%ld, adjust chunk:%ld, size:%ld\n", __FUNCTION__, __LINE__, _queue.processing_offset, ch->offset, ch->size);
+                } else {
+                    HR_LOGD("%s(%d): consume total chunk..... next offset:%ld\n", __FUNCTION__, __LINE__, _queue.processing_offset);
+                    hr_list_move_tail(&ch->entry, &_upload_queue.head);
+                    // hr_list_del(&ch->entry);
+                    _queue.num--;
+                }
                 _queue.seq++;
-                ch->offset += ws;
-                memcpy(ch->payload, ch->payload + ws, ch->size - ws);
-                ch->size -= ws;
                 _queue.chunk_offset = 0;
+
+                pthread_mutex_unlock(&_queue.mutex);
+                pthread_cond_signal(&_queue.cond);
+
+                unsigned char *md5_digest = NULL;
+                unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+                char *ptr = _upload_queue.md5sum;
+                int available = sizeof(_upload_queue.md5sum);
+
+                md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+                EVP_DigestFinal_ex(_upload_queue.mdctx, md5_digest, &md5_digest_len);
+                EVP_MD_CTX_free(_upload_queue.mdctx);
+                _upload_queue.mdctx = NULL;
+
+                for (unsigned int i = 0; i < md5_digest_len; i++) {
+                    if (available < 2) break;
+                    int ret = snprintf(ptr, available, "%02X", md5_digest[i]);
+                    available -= ret;
+                    ptr += ret;
+                }
+                OPENSSL_free(md5_digest);
+
+                HR_LOGD("%s(%d): now md5sum:%s\n", __FUNCTION__, __LINE__, _upload_queue.md5sum);
+
+                // try upload
+                do_stream_upload(&_upload_queue);
+                _upload_queue.part++;
+                //_upload_queue.content_length = 0;
+                HR_INIT_LIST_HEAD(&_upload_queue.head);
             }
 
         } else {
@@ -145,11 +257,32 @@ static void *write_routin(void *arg) {
             pthread_cond_wait(&_queue.cond, &_queue.mutex);
         }
 
-        pthread_mutex_unlock(&_queue.mutex);
-        pthread_cond_signal(&_queue.cond);
+        // pthread_mutex_unlock(&_queue.mutex);
+        // pthread_cond_signal(&_queue.cond);
 
         // usleep(1000 * 1000);
     }
+
+    HR_LOGD("%s(%d): finished .........\n", __FUNCTION__, __LINE__);
+
+    unsigned char *md5_digest = NULL;
+    unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+    char *ptr = _queue.md5sum;
+    int available = sizeof(_queue.md5sum);
+
+    md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+    EVP_DigestFinal_ex(_queue.mdctx, md5_digest, &md5_digest_len);
+    EVP_MD_CTX_free(_queue.mdctx);
+    _queue.mdctx = NULL;
+
+    for (unsigned int i = 0; i < md5_digest_len; i++) {
+        if (available < 2) break;
+        int ret = snprintf(ptr, available, "%02X", md5_digest[i]);
+        available -= ret;
+        ptr += ret;
+    }
+    OPENSSL_free(md5_digest);
+
     return NULL;
 }
 
@@ -165,7 +298,7 @@ static int do_write(char *data, off_t off, size_t length) {
     ch->payload = calloc(1, length);
     memmove(ch->payload, data, length);
 
-    HR_LOGD("%s(%d): do write in -> %d ...\n", __FUNCTION__, __LINE__, _queue.num);
+    // HR_LOGD("%s(%d): do write in -> %d ...\n", __FUNCTION__, __LINE__, _queue.num);
     pthread_mutex_lock(&_queue.mutex);
     if (_queue.num > MAX_QUEUE) {
         HR_LOGD("%s(%d): now queue is too long -> %d ...\n", __FUNCTION__, __LINE__, _queue.num);
@@ -179,17 +312,17 @@ static int do_write(char *data, off_t off, size_t length) {
 
     hr_list_for_each_prev(p, &_queue.head) {
         struct write_chunk *c1 = container_of(p, struct write_chunk, entry);
-        HR_LOGD("%s(%d): cur :%p, HEAD:%p...current:%ld\n", __FUNCTION__, __LINE__, p, &_queue.head, c1->offset);
+        // HR_LOGD("%s(%d): cur :%p, HEAD:%p...current:%ld\n", __FUNCTION__, __LINE__, p, &_queue.head, c1->offset);
 
         // the last should always bigger
         if (c1->offset < ch->offset) {
             found = 1;
-            HR_LOGD("%s(%d): found cur :%p, HEAD:%p...current:%ld\n", __FUNCTION__, __LINE__, p, &_queue.head, c1->offset);
+            // HR_LOGD("%s(%d): found cur :%p, HEAD:%p...current:%ld\n", __FUNCTION__, __LINE__, p, &_queue.head, c1->offset);
             break;
         }
     }
 
-    HR_LOGD("%s(%d): add request:%p -> %ld...\n", __FUNCTION__, __LINE__, ch, ch->offset);
+    // HR_LOGD("%s(%d): add request:%p -> %ld...\n", __FUNCTION__, __LINE__, ch, ch->offset);
     /*if (found == 0) {
         hr_list_add_tail(&ch->entry, &_queue.head);
     } else*/
@@ -280,8 +413,7 @@ static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri,
 
     return 0;
 }
-
-int init_multi_upload(uint64_t parent_id, const char *name, size_t size) {
+int init_multi_upload(const char *name, size_t size, uint64_t parent_id, struct init_multi_upload_data *data) {
     struct tcloud_buffer b;
     struct tcloud_request *req = tcloud_request_new();
 
@@ -297,7 +429,9 @@ int init_multi_upload(uint64_t parent_id, const char *name, size_t size) {
     tcloud_buffer_append_string(&b, "&");
     tcloud_buffer_append_string(&b, "fileName=");
     // care that you should encode filename when it contains zh
-    tcloud_buffer_append_string(&b, name);
+    char *escape_name = curl_easy_escape(NULL, name, strlen(name));
+    tcloud_buffer_append_string(&b, escape_name);
+    curl_free(escape_name);
     tcloud_buffer_append_string(&b, "&");
     tcloud_buffer_append_string(&b, "fileSize=");
     snprintf(tmp, sizeof(tmp), "%ld", size);
@@ -308,6 +442,75 @@ int init_multi_upload(uint64_t parent_id, const char *name, size_t size) {
     tcloud_buffer_append_string(&b, tmp);
     tcloud_buffer_append_string(&b, "&");
     tcloud_buffer_append_string(&b, "lazyCheck=1");
+
+    req->method = TR_METHOD_GET;
+    _tcloud_drive_fill_final(req, action, &b);
+
+    tcloud_buffer_reset(&b);
+    req->request(req, url, &b, NULL);
+
+    printf("result:(%ld)%s\n", b.offset, b.data);
+
+    tcloud_request_free(req);
+
+    if (!data) {
+        return 0;
+    }
+    struct json_object *root = NULL, *code = NULL, *json_data = NULL;
+    root = json_tokener_parse(b.data);
+    tcloud_buffer_free(&b);
+    if (!root) {
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "code", &code);
+    if (!code || strcmp("SUCCESS", json_object_get_string(code)) != 0) {
+        json_object_put(root);
+        printf(" can not parse json or request failed.....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "data", &json_data);
+    if (!json_data) {
+        json_object_put(root);
+        return -1;
+    }
+
+    struct json_object *json_upload_type = NULL, *json_upload_host = NULL, *json_upload_file_id = NULL, *json_file_data_exists = NULL;
+    json_object_object_get_ex(json_data, "uploadType", &json_upload_type);
+    json_object_object_get_ex(json_data, "uploadHost", &json_upload_host);
+    json_object_object_get_ex(json_data, "uploadFileId", &json_upload_file_id);
+    json_object_object_get_ex(json_data, "fileDataExists", &json_file_data_exists);
+
+    data->type = json_object_get_int(json_upload_type);
+    data->host = strdup(json_object_get_string(json_upload_host));
+    data->id = strdup(json_object_get_string(json_upload_file_id));
+    data->exists = json_object_get_int(json_file_data_exists);
+
+    HR_LOGD("%s(%d): .uploadType:%d, uploadHost:%s, uploadFileId:%s, fileDataExists:%d...\n", __FUNCTION__, __LINE__,
+            json_object_get_int(json_upload_type),
+            json_object_get_string(json_upload_host),
+            json_object_get_string(json_upload_file_id),
+            json_object_get_int(json_file_data_exists));
+    json_object_put(root);
+    return 0;
+}
+
+int get_multi_upload_urls(const char *id, int part, const char *md5) {
+    struct tcloud_buffer b;
+    struct tcloud_request *req = tcloud_request_new();
+
+    const char *url = "http://upload.cloud.189.cn/person/getMultiUploadUrls";
+
+    const char *action = "/person/getMultiUploadUrls";
+
+    char tmp[256] = {0};
+
+    tcloud_buffer_alloc(&b, 512);
+    snprintf(tmp, sizeof(tmp), "uploadFileId=%s", id);
+    tcloud_buffer_append_string(&b, tmp);
+    tcloud_buffer_append_string(&b, "&");
+    snprintf(tmp, sizeof(tmp), "partInfo=%d-%s", part, md5);
+    tcloud_buffer_append_string(&b, tmp);
 
     req->method = TR_METHOD_GET;
     _tcloud_drive_fill_final(req, action, &b);
@@ -354,8 +557,13 @@ int init_multi_upload(uint64_t parent_id, const char *name, size_t size) {
     return 0;
 }
 
-int get_multi_upload() {
+static int do_stream_upload(struct upload_queue *upload) {
+    HR_LOGD("%s(%d): upload id:%s, part:%d, md5sum:%s\n", __FUNCTION__, __LINE__, _queue.upload_id, upload->part, upload->md5sum);
+    get_multi_upload_urls(_queue.upload_id, upload->part, upload->md5sum);
+
+    return 0;
 }
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         return -1;
@@ -365,58 +573,16 @@ int main(int argc, char **argv) {
 
     pthread_mutex_init(&_queue.mutex, NULL);
     pthread_cond_init(&_queue.cond, NULL);
+    _queue.total_size = 0;
     _queue.processing_offset = 0;
     _queue.chunk_offset = 0;
     _queue.num = 0;
-#if 0
-    pthread_create(&_tid, NULL, write_routin, NULL);
 
-    usleep(500 * 1000);
-    _fd = open(argv[1], O_CREAT | O_RDWR, 0755);
-    if (_fd < 0) {
-        printf("can not open:%s\n", argv[1]);
-        return -1;
-    }
-    ssize_t rs = 0;
-    char buf[1024 * 18] = {0};
-    off_t off = 0;
+    memset((void *)&_upload_queue, 0, sizeof(_upload_queue));
+    _upload_queue.content_length = 0;
+    _upload_queue.part = 0;
+    HR_INIT_LIST_HEAD(&_upload_queue.head);
 
-    off = 1024 * 2;
-
-    lseek(_fd, off, SEEK_SET);
-    while ((rs = read(_fd, buf, sizeof(buf))) > 0) {
-        printf("read %ld bytes\n", rs);
-        do_write(buf, off, rs);
-        off += rs;
-        int c = getchar();
-        if (c == 'b') {
-            break;
-        }
-        //  usleep(500 * 1000);
-    }
-
-    lseek(_fd, 0, SEEK_SET);
-    read(_fd, buf, 1024);
-    do_write(buf, 0, 1024);
-
-    read(_fd, buf, 1024);
-    do_write(buf, 1024, 1024);
-
-    getchar();
-
-    lseek(_fd, off, SEEK_SET);
-
-    while ((rs = read(_fd, buf, sizeof(buf))) > 0) {
-        printf("read %ld bytes\n", rs);
-        do_write(buf, off, rs);
-        off += rs;
-        // getchar();
-        //  usleep(500 * 1000);
-    }
-
-    printf("rs:%ld\n", rs);
-    close(_fd);
-#endif
     _fd = open(argv[1], O_CREAT | O_RDWR, 0755);
     if (_fd < 0) {
         printf("can not open:%s\n", argv[1]);
@@ -429,7 +595,46 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    init_multi_upload(724181136469568390L, "upload_data.bin", sb.st_size);
+    _queue.total_size = sb.st_size;
+
+    struct init_multi_upload_data data;
+    memset((void *)&data, 0, sizeof(data));
+
+    init_multi_upload("upload_data.bin", sb.st_size, 724181136469568390L, &data);
+
+    if (!data.id) {
+        printf("can not get valid id\n");
+        return -1;
+    }
+
+    _queue.upload_id = strdup(data.id);
+
+    if (data.host) {
+        free(data.host);
+    }
+    if (data.id) {
+        free(data.id);
+    }
+
+    // start write routin thread
+    pthread_create(&_tid, NULL, write_routin, NULL);
+
+    usleep(500 * 1000);
+    ssize_t rs = 0;
+    char buf[1024 * 3] = {0};
+    off_t off = 0;
+
+    while ((rs = read(_fd, buf, sizeof(buf))) > 0) {
+        printf("read %ld bytes\n", rs);
+        do_write(buf, off, rs);
+        off += rs;
+        // getchar();
+        //  usleep(500 * 1000);
+    }
+
+    printf("rs:%ld\n", rs);
+    close(_fd);
+
     getchar();
     return 0;
 }
