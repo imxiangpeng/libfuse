@@ -58,6 +58,7 @@ struct write_chunk {
     off_t offset;
     size_t size;
     void *payload;
+
     struct hr_list_head entry;
 };
 
@@ -66,9 +67,14 @@ int _fd = -1;
 struct write_queue {
     int seq;
 
+    int is_eof;
     char *name;
     size_t total_size;
+
+    int slice_size;
     char md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+    char slice_md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+    struct tcloud_buffer slice_md5sum_data;
     EVP_MD_CTX *mdctx;
 
     char *upload_id;
@@ -99,11 +105,18 @@ struct init_multi_upload_data {
     int exists;
 };
 
+struct multi_upload_urls_resp{
+    char *url;
+    char *header;
+};
+
+
 static pthread_t _tid = 0;
 
 static int _dump_fd = -1;
 
 static int do_stream_upload(struct upload_queue *upload);
+static int do_commit_upload(struct write_queue *queue);
 
 void chunk_free(struct write_chunk *ch) {
     if (!ch) return;
@@ -130,13 +143,26 @@ static void *write_routin(void *arg) {
         if (hr_list_empty(&_queue.head) || _queue.num == 0) {
             // we should wait
             HR_LOGD("%s(%d): now queue is empty ...\n", __FUNCTION__, __LINE__);
+            if (_queue.is_eof == 1) {
+                HR_LOGD("%s(%d): now queue is empty, goto finished ...\n", __FUNCTION__, __LINE__);
+                // finished un uploaded data
+                pthread_mutex_unlock(&_queue.mutex);
+                break;
+            }
             pthread_cond_wait(&_queue.cond, &_queue.mutex);
+            pthread_mutex_unlock(&_queue.mutex);
+            continue;
         }
 
         struct write_chunk *ch = hr_list_first_entry(&_queue.head, struct write_chunk, entry);
         if (!ch) {
             pthread_mutex_unlock(&_queue.mutex);
             continue;
+        }
+
+        // 0 chunk -> write end
+        if (ch->size == 0) {
+            break;
         }
 
         if (_queue.processing_offset == 0) {
@@ -211,7 +237,7 @@ static void *write_routin(void *arg) {
                     ch->size -= ws;
                     // adjust left data to begin
                     memcpy(ch->payload, ch->payload + ws, ch->size);
-                    
+
                     HR_LOGD("%s(%d): split ..... next offset:%ld, adjust chunk:%ld, size:%ld\n", __FUNCTION__, __LINE__, _queue.processing_offset, ch->offset, ch->size);
                 } else {
                     HR_LOGD("%s(%d): consume total chunk..... next offset:%ld\n", __FUNCTION__, __LINE__, _queue.processing_offset);
@@ -245,10 +271,17 @@ static void *write_routin(void *arg) {
 
                 HR_LOGD("%s(%d): now md5sum:%s\n", __FUNCTION__, __LINE__, _upload_queue.md5sum);
 
+                if (_upload_queue.part != 0) {
+                    tcloud_buffer_append_string(&_queue.slice_md5sum_data, "\n");
+                }
+                tcloud_buffer_append_string(&_queue.slice_md5sum_data, _upload_queue.md5sum);
                 // try upload
                 do_stream_upload(&_upload_queue);
                 _upload_queue.part++;
-                //_upload_queue.content_length = 0;
+
+                // release all elements
+
+                _upload_queue.content_length = 0;
                 HR_INIT_LIST_HEAD(&_upload_queue.head);
             }
 
@@ -265,6 +298,39 @@ static void *write_routin(void *arg) {
 
     HR_LOGD("%s(%d): finished .........\n", __FUNCTION__, __LINE__);
 
+    // update left data
+    if (!hr_list_empty(&_upload_queue.head)) {
+        unsigned char *md5_digest = NULL;
+        unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+        char *ptr = _upload_queue.md5sum;
+        int available = sizeof(_upload_queue.md5sum);
+
+        md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+        EVP_DigestFinal_ex(_upload_queue.mdctx, md5_digest, &md5_digest_len);
+        EVP_MD_CTX_free(_upload_queue.mdctx);
+        _upload_queue.mdctx = NULL;
+
+        for (unsigned int i = 0; i < md5_digest_len; i++) {
+            if (available < 2) break;
+            int ret = snprintf(ptr, available, "%02X", md5_digest[i]);
+            available -= ret;
+            ptr += ret;
+        }
+        OPENSSL_free(md5_digest);
+
+        HR_LOGD("%s(%d): now md5sum:%s\n", __FUNCTION__, __LINE__, _upload_queue.md5sum);
+        if (_upload_queue.part != 0) {
+            tcloud_buffer_append_string(&_queue.slice_md5sum_data, "\n");
+        }
+        tcloud_buffer_append_string(&_queue.slice_md5sum_data, _upload_queue.md5sum);
+        // try upload
+        do_stream_upload(&_upload_queue);
+        _upload_queue.part++;
+        _queue.slice_size = _upload_queue.part;
+        //_upload_queue.content_length = 0;
+        HR_INIT_LIST_HEAD(&_upload_queue.head);
+    }
+
     unsigned char *md5_digest = NULL;
     unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
     char *ptr = _queue.md5sum;
@@ -272,8 +338,6 @@ static void *write_routin(void *arg) {
 
     md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
     EVP_DigestFinal_ex(_queue.mdctx, md5_digest, &md5_digest_len);
-    EVP_MD_CTX_free(_queue.mdctx);
-    _queue.mdctx = NULL;
 
     for (unsigned int i = 0; i < md5_digest_len; i++) {
         if (available < 2) break;
@@ -283,6 +347,34 @@ static void *write_routin(void *arg) {
     }
     OPENSSL_free(md5_digest);
 
+    // generate slice_md5sum
+    // if one slice, copy _queue.slice_md5sum_data.data -> slice_md5sum, no need calc again
+    HR_LOGD("%s(%d): slice_md5sum data:%s\n", _queue.slice_md5sum_data.data);
+    if (_queue.slice_size == 1) {
+        snprintf(_queue.slice_md5sum, sizeof(_queue.slice_md5sum), "%s", _queue.slice_md5sum_data.data);
+    } else {
+        EVP_DigestUpdate(_queue.mdctx, _queue.slice_md5sum_data.data, _queue.slice_md5sum_data.offset);
+        md5_digest_len = EVP_MD_size(EVP_md5());
+        ptr = _queue.slice_md5sum;
+        available = sizeof(_queue.slice_md5sum);
+
+        md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+        EVP_DigestFinal_ex(_queue.mdctx, md5_digest, &md5_digest_len);
+
+        for (unsigned int i = 0; i < md5_digest_len; i++) {
+            if (available < 2) break;
+            int ret = snprintf(ptr, available, "%02X", md5_digest[i]);
+            available -= ret;
+            ptr += ret;
+        }
+        OPENSSL_free(md5_digest);
+
+        HR_LOGD("%s(%d): slice_md5sum:%s\n", _queue.slice_md5sum);
+    }
+    EVP_MD_CTX_free(_queue.mdctx);
+    _queue.mdctx = NULL;
+
+    do_commit_upload(&_queue);
     return NULL;
 }
 
@@ -495,7 +587,7 @@ int init_multi_upload(const char *name, size_t size, uint64_t parent_id, struct 
     return 0;
 }
 
-int get_multi_upload_urls(const char *id, int part, const char *md5) {
+int get_multi_upload_urls(const char *id, int part, const char *md5, struct multi_upload_urls_resp *res) {
     struct tcloud_buffer b;
     struct tcloud_request *req = tcloud_request_new();
 
@@ -535,35 +627,76 @@ int get_multi_upload_urls(const char *id, int part, const char *md5) {
         printf(" can not parse json or request failed.....\n");
         return -1;
     }
-    json_object_object_get_ex(root, "data", &result_data);
-    if (!result_data) {
-        json_object_put(root);
-        return -1;
+
+    struct json_object *json_upload_urls= NULL;
+    json_object_object_get_ex(root, "uploadUrls", &json_upload_urls);
+    
+    const char *part_number_prefix = "partNumber_";
+    json_object_object_foreach(json_upload_urls, key, val) {
+       if (!strncmp(key, part_number_prefix, strlen(part_number_prefix))){
+            res->url = strdup(json_object_get_string(val));
+       } else if (!strcmp(key, "RequestHeader")){
+            res->header = strdup(json_object_get_string(val));
+       }
+    
     }
-
-    struct json_object *json_upload_type = NULL, *json_upload_host = NULL, *json_upload_file_id = NULL, *json_file_data_exists = NULL;
-    json_object_object_get_ex(result_data, "uploadType", &json_upload_type);
-    json_object_object_get_ex(result_data, "uploadHost", &json_upload_host);
-    json_object_object_get_ex(result_data, "uploadFileId", &json_upload_file_id);
-    json_object_object_get_ex(result_data, "fileDataExists", &json_file_data_exists);
-
-    HR_LOGD("%s(%d): .uploadType:%d, uploadHost:%s, uploadFileId:%s, fileDataExists:%d...\n", __FUNCTION__, __LINE__,
-            json_object_get_int(json_upload_type),
-            json_object_get_string(json_upload_host),
-            json_object_get_string(json_upload_file_id),
-            json_object_get_int(json_file_data_exists));
     json_object_put(root);
+        
+    
 
     return 0;
 }
 
 static int do_stream_upload(struct upload_queue *upload) {
+    struct multi_upload_urls_resp res;
+    memset((void *)&res, 0, sizeof(res));
     HR_LOGD("%s(%d): upload id:%s, part:%d, md5sum:%s\n", __FUNCTION__, __LINE__, _queue.upload_id, upload->part, upload->md5sum);
-    get_multi_upload_urls(_queue.upload_id, upload->part, upload->md5sum);
+    get_multi_upload_urls(_queue.upload_id, upload->part + 1, upload->md5sum, &res);
 
+    HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
+    
+    if (res.url) {
+        free(res.url);
+    }
+    if (res.header) {
+        free(res.header);
+    }
     return 0;
 }
 
+static int do_commit_upload(struct write_queue *queue) {
+    struct tcloud_buffer b;
+    struct tcloud_request *req = tcloud_request_new();
+
+    const char *url = "http://upload.cloud.189.cn/person/commitMultiUploadFile";
+
+    const char *action = "/person/commitMultiUploadFile";
+
+    char tmp[256] = {0};
+
+    tcloud_buffer_alloc(&b, 512);
+    snprintf(tmp, sizeof(tmp), "uploadFileId=%s", queue->upload_id);
+    tcloud_buffer_append_string(&b, tmp);
+    tcloud_buffer_append_string(&b, "&");
+    snprintf(tmp, sizeof(tmp), "fileMd5=%s", queue->md5sum);
+    tcloud_buffer_append_string(&b, tmp);
+    tcloud_buffer_append_string(&b, "&");
+    snprintf(tmp, sizeof(tmp), "sliceMd5=%s", queue->slice_md5sum);
+    tcloud_buffer_append_string(&b, tmp);
+    tcloud_buffer_append_string(&b, "&");
+    snprintf(tmp, sizeof(tmp), "lazyCheck=%d", queue->slice_size == 1 ? 0 : 1);
+    tcloud_buffer_append_string(&b, tmp);
+
+    req->method = TR_METHOD_GET;
+    _tcloud_drive_fill_final(req, action, &b);
+
+    tcloud_buffer_reset(&b);
+    req->request(req, url, &b, NULL);
+
+    printf("result:(%ld)%s\n", b.offset, b.data);
+
+    tcloud_request_free(req);
+}
 int main(int argc, char **argv) {
     if (argc < 2) {
         return -1;
@@ -577,6 +710,7 @@ int main(int argc, char **argv) {
     _queue.processing_offset = 0;
     _queue.chunk_offset = 0;
     _queue.num = 0;
+    tcloud_buffer_alloc(&_queue.slice_md5sum_data, 512);
 
     memset((void *)&_upload_queue, 0, sizeof(_upload_queue));
     _upload_queue.content_length = 0;
@@ -634,7 +768,12 @@ int main(int argc, char **argv) {
 
     printf("rs:%ld\n", rs);
     close(_fd);
+    _queue.is_eof = 1;
+    pthread_cond_broadcast(&_queue.cond);
 
+    printf("waiting finished ...\n");
+    pthread_join(_tid, NULL);
+    printf("press any key finished ...\n");
     getchar();
     return 0;
 }
