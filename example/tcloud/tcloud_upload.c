@@ -92,6 +92,7 @@ struct upload_queue {
     size_t content_length;
     // md5
     char md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+    unsigned char md5_digest[MD5_DIGEST_LENGTH];
     EVP_MD_CTX *mdctx;
     CURLM *multi;
     CURL *curl;  // opened handle
@@ -229,7 +230,7 @@ static void *write_routin(void *arg) {
                     memcpy(c1->payload, ch->payload, ws);
                     // add data to upload queue
                     hr_list_add_tail(&c1->entry, &_upload_queue.head);
-                    _upload_queue.content_length += ws;
+                    // _upload_queue.content_length += ws;
 
                     // keep ch in incoming queue
                     ch->offset += ws;
@@ -251,11 +252,11 @@ static void *write_routin(void *arg) {
                 pthread_cond_signal(&_queue.cond);
 
                 unsigned char *md5_digest = NULL;
-                unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+                unsigned int md5_digest_len = MD5_DIGEST_LENGTH;//EVP_MD_size(EVP_md5());
                 char *ptr = _upload_queue.md5sum;
                 int available = sizeof(_upload_queue.md5sum);
 
-                md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+                md5_digest = _upload_queue.md5_digest;// (unsigned char *)OPENSSL_malloc(md5_digest_len);
                 EVP_DigestFinal_ex(_upload_queue.mdctx, md5_digest, &md5_digest_len);
                 EVP_MD_CTX_free(_upload_queue.mdctx);
                 _upload_queue.mdctx = NULL;
@@ -266,7 +267,7 @@ static void *write_routin(void *arg) {
                     available -= ret;
                     ptr += ret;
                 }
-                OPENSSL_free(md5_digest);
+                // OPENSSL_free(md5_digest);
 
                 HR_LOGD("%s(%d): now md5sum:%s\n", __FUNCTION__, __LINE__, _upload_queue.md5sum);
 
@@ -300,11 +301,11 @@ static void *write_routin(void *arg) {
     // update left data
     if (!hr_list_empty(&_upload_queue.head)) {
         unsigned char *md5_digest = NULL;
-        unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+        unsigned int md5_digest_len = MD5_DIGEST_LENGTH;//EVP_MD_size(EVP_md5());
         char *ptr = _upload_queue.md5sum;
         int available = sizeof(_upload_queue.md5sum);
 
-        md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+        md5_digest = _upload_queue.md5_digest;// (unsigned char *)OPENSSL_malloc(md5_digest_len);
         EVP_DigestFinal_ex(_upload_queue.mdctx, md5_digest, &md5_digest_len);
         EVP_MD_CTX_free(_upload_queue.mdctx);
         _upload_queue.mdctx = NULL;
@@ -315,7 +316,7 @@ static void *write_routin(void *arg) {
             available -= ret;
             ptr += ret;
         }
-        OPENSSL_free(md5_digest);
+        // OPENSSL_free(md5_digest);
 
         HR_LOGD("%s(%d): now md5sum:%s\n", __FUNCTION__, __LINE__, _upload_queue.md5sum);
         if (_upload_queue.part != 0) {
@@ -326,7 +327,18 @@ static void *write_routin(void *arg) {
         do_stream_upload(&_upload_queue);
         _upload_queue.part++;
         _queue.slice_size = _upload_queue.part;
-        //_upload_queue.content_length = 0;
+        
+        
+        while(!hr_list_empty(&_upload_queue.head)) {
+            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed ....................\n", __FUNCTION__, __LINE__);
+            
+        struct write_chunk *c = hr_list_first_entry(&_queue.head, struct write_chunk, entry);
+            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed .......:%p.............\n", __FUNCTION__, __LINE__, c) ;
+            hr_list_del(&c->entry);
+            free(c);
+        }
+
+        _upload_queue.content_length = 0;
         HR_INIT_LIST_HEAD(&_upload_queue.head);
     }
 
@@ -345,14 +357,22 @@ static void *write_routin(void *arg) {
         ptr += ret;
     }
     OPENSSL_free(md5_digest);
+    
+    HR_LOGD("%s(%d): file total md5sum:%s\n", __FUNCTION__, __LINE__, _queue.md5sum);
 
     // generate slice_md5sum
     // if one slice, copy _queue.slice_md5sum_data.data -> slice_md5sum, no need calc again
-    HR_LOGD("%s(%d): slice_md5sum data:%s\n", _queue.slice_md5sum_data.data);
+    HR_LOGD("%s(%d): num:%d slice_md5sum data:%s\n", __FUNCTION__, __LINE__, _queue.slice_size, _queue.slice_md5sum_data.data);
+    printf("%s(%d): num:%d slice_md5sum data:%s\n", __FUNCTION__, __LINE__, _queue.slice_size, _queue.slice_md5sum_data.data);
+
     if (_queue.slice_size == 1) {
         snprintf(_queue.slice_md5sum, sizeof(_queue.slice_md5sum), "%s", _queue.slice_md5sum_data.data);
     } else {
-        EVP_DigestUpdate(_queue.mdctx, _queue.slice_md5sum_data.data, _queue.slice_md5sum_data.offset);
+        // must call init again
+        EVP_DigestInit_ex(_queue.mdctx, EVP_md5(), NULL);
+        
+        printf("%s(%d): data length:%ld  vs offset :%ld\n", __FUNCTION__, __LINE__, strlen(_queue.slice_md5sum_data.data), _queue.slice_md5sum_data.offset);
+        EVP_DigestUpdate(_queue.mdctx, _queue.slice_md5sum_data.data, _queue.slice_md5sum_data.offset );
         md5_digest_len = EVP_MD_size(EVP_md5());
         ptr = _queue.slice_md5sum;
         available = sizeof(_queue.slice_md5sum);
@@ -368,11 +388,13 @@ static void *write_routin(void *arg) {
         }
         OPENSSL_free(md5_digest);
 
-        HR_LOGD("%s(%d): slice_md5sum:%s\n", _queue.slice_md5sum);
+        HR_LOGD("%s(%d): slice_md5sum:%s\n", __FUNCTION__, __LINE__, _queue.slice_md5sum);
     }
     EVP_MD_CTX_free(_queue.mdctx);
     _queue.mdctx = NULL;
 
+
+    HR_LOGD("%s(%d): final file total md5sum:%s, slice_md5sum:%s\n", __FUNCTION__, __LINE__, _queue.md5sum, _queue.slice_md5sum);
     do_commit_upload(&_queue);
     return NULL;
 }
@@ -586,7 +608,7 @@ int init_multi_upload(const char *name, size_t size, uint64_t parent_id, struct 
     return 0;
 }
 
-int get_multi_upload_urls(const char *id, int part, const char *md5, struct multi_upload_urls_resp *res) {
+int get_multi_upload_urls(const char *id, int part, const char *md5_base64, struct multi_upload_urls_resp *res) {
     struct tcloud_buffer b;
     struct tcloud_request *req = tcloud_request_new();
 
@@ -600,7 +622,7 @@ int get_multi_upload_urls(const char *id, int part, const char *md5, struct mult
     snprintf(tmp, sizeof(tmp), "uploadFileId=%s", id);
     tcloud_buffer_append_string(&b, tmp);
     tcloud_buffer_append_string(&b, "&");
-    snprintf(tmp, sizeof(tmp), "partInfo=%d-%s", part, md5);
+    snprintf(tmp, sizeof(tmp), "partInfo=%d-%s", part, md5_base64);
     tcloud_buffer_append_string(&b, tmp);
 
     req->method = TR_METHOD_GET;
@@ -662,6 +684,8 @@ static size_t _read_callback(void *ptr, size_t size, size_t nmemb, void *userdat
         memcpy(ptr, ch->payload, rs);
         hr_list_del(&ch->entry);
         // free ch
+        free(ch->payload);
+        free(ch);
         return rs;
     }
     rs = size * nmemb;
@@ -683,7 +707,15 @@ static int do_stream_upload(struct upload_queue *upload) {
     tcloud_buffer_alloc(&b, 512);
     memset((void *)&res, 0, sizeof(res));
     HR_LOGD("%s(%d): upload id:%s, part:%d, md5sum:%s\n", __FUNCTION__, __LINE__, _queue.upload_id, upload->part, upload->md5sum);
-    get_multi_upload_urls(_queue.upload_id, upload->part + 1, upload->md5sum, &res);
+    // char buf[128] = {0};
+    
+    char* md5_base64 = tcloud_utils_base64_encode((const char*)upload->md5_digest, sizeof(upload->md5_digest));
+
+    printf("md5 base64:%s\n", md5_base64);
+    
+    get_multi_upload_urls(_queue.upload_id, upload->part + 1, md5_base64, &res);
+    
+    free(md5_base64);
 
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
 
@@ -704,14 +736,34 @@ static int do_stream_upload(struct upload_queue *upload) {
     // char *murl = "http://media-sdqd-fy-person.sdoss.ctyunxs.cn/PERSONCLOUD/ed44c77a-bd6b-4626-b24b-ba7a9b9f0a32.bin?partNumber=4&uploadId=2~X_FmL_9DbnyshsAAhiWB5y3pJ3-tXDH";
     // murl = "https://media-sdqd-fy-person.sdoss.ctyunxs.cn/PERSONCLOUD/f26e5dfd-839f-4f5a-b972-17119dbb153b.bin?partNumber\u003d1\u0026uploadId\u003d2~SXhXmQoL_mMVAlbmM6DYbQB7fOWU13F";
     
-    if (strncmp(res.url, "https://", 8)) {
-        strcpy(res.url, res.url + 5);
+    HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
+    if (!strncmp(res.url, "https://", 8)) {
+        size_t len = strlen(res.url);
+        memcpy(res.url + 4, res.url + 5, len - 5);
+        res.url[len - 1] = '\0';
     }
+
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
     char tmp[128] = {0};
-    snprintf(tmp, sizeof(tmp), "%ld", upload->content_length);
-    req->set_header(req, "Content-Length", tmp);
-    req->put(req, res.url, &b, _read_callback, upload);
+    // snprintf(tmp, sizeof(tmp), "%ld", upload->content_length);
+    // req->set_header(req, "Content-Length", tmp);
+    req->set_header(req, "Expect", NULL);
+
+    req->set_header(req, "Accept", "application/json;charset=UTF-8");
+    
+    
+
+    
+    req->set_header(req, "User-Agent", _user_agent);
+
+
+    req->set_query(req, "clientType", "TELEPC");
+    req->set_query(req, "version", "6.2");
+    req->set_query(req, "channelId", "web_cloud.189.cn");
+    snprintf(tmp, sizeof(tmp), "%d_%d", rand(), rand());
+    req->set_query(req, "rand", tmp);
+    
+    req->put(req, res.url, &b, upload->content_length, _read_callback, upload);
 
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
     printf("upload result:%s\n", b.data);
@@ -726,7 +778,7 @@ static int do_stream_upload(struct upload_queue *upload) {
     tcloud_buffer_free(&b);
     
 
-    getchar();
+    // getchar();
     return 0;
 }
 
@@ -750,7 +802,7 @@ static int do_commit_upload(struct write_queue *queue) {
     snprintf(tmp, sizeof(tmp), "sliceMd5=%s", queue->slice_md5sum);
     tcloud_buffer_append_string(&b, tmp);
     tcloud_buffer_append_string(&b, "&");
-    snprintf(tmp, sizeof(tmp), "lazyCheck=%d", queue->slice_size == 1 ? 0 : 1);
+    snprintf(tmp, sizeof(tmp), "lazyCheck=%d", 1 /*queue->slice_size == 1 ? 0 : 1*/);
     tcloud_buffer_append_string(&b, tmp);
 
     req->method = TR_METHOD_GET;
@@ -760,11 +812,14 @@ static int do_commit_upload(struct write_queue *queue) {
     req->request(req, url, &b, NULL);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
+    // parse result:
+    // {"code":"SUCCESS","file":{"userFileId":"924751139406138475","fileName":"upload_data(20240614113937).bin","fileSize":330692658,"fileMd5":"58D7264C94A1F48513A83D6F55C74ABD","createDate":"Jun 14, 2024 11:39:37 AM","rev":20240614113937,"userId":300000969222651}}
 
     tcloud_request_free(req);
     tcloud_buffer_free(&b);
 }
 int main(int argc, char **argv) {
+    printf("argc:%d\n", argc);
     if (argc < 2) {
         return -1;
     }
@@ -784,7 +839,7 @@ int main(int argc, char **argv) {
     _upload_queue.part = 0;
     HR_INIT_LIST_HEAD(&_upload_queue.head);
 
-    _fd = open(argv[1], O_CREAT | O_RDWR, 0755);
+    _fd = open(argv[1], O_RDONLY, 0755);
     if (_fd < 0) {
         printf("can not open:%s\n", argv[1]);
         return -1;
@@ -801,7 +856,8 @@ int main(int argc, char **argv) {
     struct init_multi_upload_data data;
     memset((void *)&data, 0, sizeof(data));
 
-    init_multi_upload("upload_data.bin", sb.st_size, 724181136469568390L, &data);
+    // init_multi_upload("upload_data.bin", sb.st_size, 724181136469568390L, &data);
+    init_multi_upload(basename(argv[1]), sb.st_size, 724181136469568390L, &data);
 
     if (!data.id) {
         printf("can not get valid id\n");
@@ -841,6 +897,12 @@ int main(int argc, char **argv) {
     printf("waiting finished ...\n");
     pthread_join(_tid, NULL);
     printf("press any key finished ...\n");
+    
+    if (_queue.upload_id) {
+        free(_queue.upload_id);
+    }
+
+    tcloud_buffer_free(&_queue.slice_md5sum_data);
     getchar();
     return 0;
 }

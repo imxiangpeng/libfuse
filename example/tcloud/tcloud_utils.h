@@ -11,5 +11,6 @@ int tcloud_utils_generate_uuid(char *uuid, size_t len);
 // please release the memory
 char *tcloud_utils_hmac_sha1(const char *key, const unsigned char *data, size_t len);
 int tcloud_utils_aes_ecb_data(unsigned char *key, void *data, size_t length, struct tcloud_buffer *r);
-int tcloud_utils_rsa_encrypt(const char* public_key, const char *data, size_t length, char *out, size_t *out_len);
+int tcloud_utils_rsa_encrypt(const char *public_key, const char *data, size_t length, char *out, size_t *out_len);
+char *tcloud_utils_base64_encode(const char *data, size_t length);
 #endif

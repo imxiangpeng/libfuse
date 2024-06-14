@@ -306,7 +306,7 @@ static int _http_do_post(struct tcloud_request *req, const char *url, struct tcl
     return req->request(req, url, b, h);
 }
 
-static int _http_do_put(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, size_t (*read_callback)(void *ptr, size_t size, size_t nmemb, void *userdata), void *args) {
+static int _http_do_put(struct tcloud_request *req, const char *url, struct tcloud_buffer *b, size_t size, size_t (*read_callback)(void *ptr, size_t size, size_t nmemb, void *userdata), void *args) {
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
     CURLcode rc;
     CURL *curl = NULL;
@@ -358,7 +358,12 @@ static int _http_do_put(struct tcloud_request *req, const char *url, struct tclo
     curl_easy_setopt(curl, CURLOPT_PUT, 1L);
     curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
     curl_easy_setopt(curl, CURLOPT_READDATA, (void *)args);
+    curl_easy_setopt(curl, CURLOPT_INFILESIZE, size);
+ 
     HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+    
+     /* enable all supported built-in compressions */
+    // curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");   
 
     // follow redirect
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
