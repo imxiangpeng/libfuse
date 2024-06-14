@@ -1,48 +1,42 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include <openssl/evp.h>
+
 #include "hr_list.h"
 #endif
 #include <ctype.h>
+#include <curl/curl.h>
 #include <curl/multi.h>
+#include <curl/urlapi.h>
+#include <errno.h>
 #include <fcntl.h>
-#include <sys/param.h>
-#include <unistd.h>
-#include "tcloud/tcloud_request.h"
-#include "tcloud_utils.h"
-
 #include <json-c/json.h>
 #include <json-c/json_object.h>
-#include <stdint.h>
-#include "tcloud/hr_log.h"
-
-#include <stdlib.h>
-#include <time.h>
-
-#include <errno.h>
-#include <string.h>
-
-#include <stddef.h>
-#include <stdio.h>
-#include <pthread.h>
-
 #include <openssl/aes.h>
 #include <openssl/err.h>
 #include <openssl/hmac.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-
-#include <curl/curl.h>
-#include <curl/urlapi.h>
+#include <pthread.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/param.h>
+#include <time.h>
+#include <unistd.h>
 #include <uuid/uuid.h>
-#include "tcloud_buffer.h"
 
 #include "j2sobject_cloud.h"
+#include "tcloud/hr_log.h"
+#include "tcloud/tcloud_request.h"
+#include "tcloud_buffer.h"
 #include "tcloud_drive.h"
 #include "tcloud_request.h"
-#include "xxtea.h"
+#include "tcloud_utils.h"
 #include "uthash.h"
-
-#include <pthread.h>
+#include "xxtea.h"
 
 #define WEB_BASE_URL "https://cloud.189.cn"
 #define APPID "8025431004"
@@ -134,6 +128,7 @@ struct tcloud_drive_upload_fd {
     EVP_MD_CTX *mdctx;
 
     // current slice upload related ...
+    int slice_index_num;  // part num/id
     EVP_MD_CTX *slice_mdctx;
     size_t slice_offset;
     size_t slice_content_length;  // current slice size
@@ -972,6 +967,215 @@ struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent) {
 }
 
 static void *_tcloud_drive_upload_routin(void *arg) {
+    struct tcloud_drive_upload_fd *fd = (struct tcloud_drive_upload_fd *)arg;
+    struct tcloud_drive_data_chunk *ch = NULL;
+
+    char md5[MD5_DIGEST_LENGTH * 2 + 1] = {0};
+
+    if (!fd) return NULL;
+
+    fd->mdctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(fd->mdctx, EVP_md5(), NULL);
+
+    fd->slice_mdctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(fd->slice_mdctx, EVP_md5(), NULL);
+
+    while (1) {
+        pthread_mutex_lock(&fd->mutex);
+
+        if (hr_list_empty(&fd->incoming_queue)) {
+            HR_LOGD("%s(%d): incoming queue is empty ...\n", __FUNCTION__, __LINE__);
+            if (TCLOUD_DRIVE_FD(fd)->is_eof) {
+                pthread_mutex_unlock(&fd->mutex);
+                break;
+            }
+            pthread_cond_wait(&fd->cond, &fd->mutex);
+            // we should verify weather it's end
+            pthread_mutex_unlock(&fd->mutex);
+            continue;
+        }
+
+        // peek the first chunk
+        ch = hr_list_first_entry(&fd->incoming_queue, struct tcloud_drive_data_chunk, entry);
+
+        // zero chunk -> end of file
+        if (ch->size == 0) {
+            pthread_mutex_unlock(&fd->mutex);
+            break;
+        }
+
+        // current chunk is not order! wait next chunk come in
+        if (fd->sequence_processing_offset != ch->offset) {
+            pthread_cond_wait(&fd->cond, &fd->mutex);
+            pthread_mutex_unlock(&fd->mutex);
+            continue;
+        }
+
+        // verify current slice is full?
+        if (fd->slice_offset + ch->size < fd->split_slice_size) {
+            // adjust current slice to upload queue
+            EVP_DigestUpdate(fd->mdctx, ch->payload, ch->size);
+            EVP_DigestUpdate(fd->slice_mdctx, ch->payload, ch->size);
+            fd->slice_offset += ch->size;
+            fd->sequence_processing_offset += ch->size;
+            fd->slice_content_length += ch->size;
+
+            // move to upload queue
+            hr_list_move_tail(&ch->entry, &fd->upload_queue);
+            fd->pending_length--;
+            pthread_cond_signal(&fd->cond);
+            pthread_mutex_unlock(&fd->mutex);
+            continue;
+        }
+
+        // now it's large than split slice size, we should split chunk
+        size_t s = fd->split_slice_size - fd->slice_offset;
+
+        EVP_DigestUpdate(fd->mdctx, ch->payload, s);
+        EVP_DigestUpdate(fd->slice_mdctx, ch->payload, s);
+        fd->slice_offset += s;
+        fd->sequence_processing_offset += s;
+        fd->slice_content_length += s;
+
+        // consume full chunk
+        if (ch->size - s == 0) {
+            hr_list_move_tail(&ch->entry, &fd->upload_queue);
+            fd->pending_length--;
+        } else {
+            // split current chunk to two, and leave current chunk in incoming queue
+            // append data bellow chunk directly
+            struct tcloud_drive_data_chunk *n = (struct tcloud_drive_data_chunk *)calloc(1, sizeof(struct tcloud_drive_data_chunk) + size);
+            if (!n) {
+                // return -ENOMEM;
+            }
+
+            HR_INIT_LIST_HEAD(&n->entry);
+
+            n->offset = ch->offset;
+            n->size = s;
+            // copy chunk write data to new chunk
+            memcpy(n->payload, ch->payload, s);
+            // add new chunk to upload queue
+            hr_list_add_tail(&n->entry, &fd->upload_queue);
+
+            // leave left data in current chunk
+            ch->offset += s;
+            ch->size -= s;
+
+            memcpy(ch->payload, ch->payload + s, ch->size);
+        }
+
+        // calc current slice md5 information
+        unsigned int digest_length = sizeof(fd->slice_md5_digest);
+        EVP_DigestFinal_ex(fd->slice_mdctx, fd->slice_md5_digest, &digest_length);
+
+        char *ptr = md5;
+        int available = sizeof(md5);
+        for (unsigned int i = 0; i < digest_length; i++) {
+            if (available < 2) break;
+            int ret = snprintf(ptr, available, "%02X", fd->slice_md5_digest[i]);
+            available -= ret;
+            ptr += ret;
+        }
+
+        if (fd->slice_index_num != 0) {
+            tcloud_buffer_append_string(&fd->slices_md5sum_data, "\n");
+        }
+        tcloud_buffer_append_string(&fd->slices_md5sum_data, md5);
+
+        fd->slice_index_num++;
+
+        // init md5 ctx again for next slice
+        EVP_DigestInit_ex(fd->slice_mdctx, EVP_md5(), NULL);
+        memset((void *)fd->slice_md5_digest, 0, sizeof(fd->slice_md5_digest));
+        // do upload ...
+
+        fd->slice_offset = 0;
+        fd->slice_content_length = 0;
+
+        // make sure all chunk have been freed!
+        // normal it will be freed when have been readed!
+        while (!hr_list_empty(&fd->upload_queue)) {
+            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed ....................\n", __FUNCTION__, __LINE__);
+
+            ch = hr_list_first_entry(&fd->incoming_queue, struct tcloud_drive_data_chunk, entry);
+            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed .......:%p.............\n", __FUNCTION__, __LINE__, ch);
+            hr_list_del(&ch->entry);
+            free(ch);
+            ch = NULL;
+        }
+
+        HR_INIT_LIST_HEAD(&fd->upload_queue);
+    }
+
+    // final last slice (not full in above)
+
+    // update the last not full slice
+    if (!hr_list_empty(&fd->upload_queue)) {
+        // calc current slice md5 information
+        unsigned int digest_length = sizeof(fd->slice_md5_digest);
+        EVP_DigestFinal_ex(fd->slice_mdctx, fd->slice_md5_digest, &digest_length);
+
+        char *ptr = md5;
+        int available = sizeof(md5);
+        for (unsigned int i = 0; i < digest_length; i++) {
+            if (available < 2) break;
+            int ret = snprintf(ptr, available, "%02X", fd->slice_md5_digest[i]);
+            available -= ret;
+            ptr += ret;
+        }
+
+        // uploading the last ...
+    }
+
+    // final total file md5sum
+    unsigned char *md5_digest = NULL;
+    unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+    char *ptr = fd->md5sum;
+    int available = sizeof(fd->md5sum);
+
+    md5_digest = (unsigned char *)OPENSSL_malloc(md5_digest_len);
+    EVP_DigestFinal_ex(fd->mdctx, md5_digest, &md5_digest_len);
+
+    for (unsigned int i = 0; i < md5_digest_len; i++) {
+        if (available < 2) break;
+        int ret = snprintf(ptr, available, "%02X", md5_digest[i]);
+        available -= ret;
+        ptr += ret;
+    }
+
+    HR_LOGD("%s(%d): file total md5sum:%s\n", __FUNCTION__, __LINE__, fd->md5sum);
+
+    // multi parts ?
+    if (TCLOUD_DRIVE_FD(fd)->size / fd->split_slice_size > 1) {
+        snprintf(fd->slices_md5sum, sizeof(fd->slices_md5sum), "%s", fd->slices_md5sum_data.data);
+    } else {
+        // must call init again
+        EVP_DigestInit_ex(fd->mdctx, EVP_md5(), NULL);
+
+        EVP_DigestUpdate(fd->mdctx, fd->slices_md5sum_data.data, fd->slices_md5sum_data.offset);
+        md5_digest_len = EVP_MD_size(EVP_md5());
+        ptr = fd->slices_md5sum;
+        available = sizeof(fd->slices_md5sum);
+
+        memset((void *)md5_digest, 0, md5_digest_len);
+        EVP_DigestFinal_ex(fd->mdctx, md5_digest, &md5_digest_len);
+
+        for (unsigned int i = 0; i < md5_digest_len; i++) {
+            if (available < 2) break;
+            int ret = snprintf(ptr, available, "%02X", md5_digest[i]);
+            available -= ret;
+            ptr += ret;
+        }
+    }
+
+    OPENSSL_free(md5_digest);
+    // prepare commit
+
+    // memset((void *)fd->slices_md5sum, 0, sizeof(fd->slices_md5sum));
+
+    // free any ...
+
     return NULL;
 }
 int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t size, off_t offset) {
