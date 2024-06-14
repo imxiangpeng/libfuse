@@ -1,6 +1,7 @@
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include <asm-generic/errno-base.h>
 #include <stdint.h>
 #include <sys/stat.h>
 #endif
@@ -890,7 +891,11 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 
     fi->direct_io = 1;
     fi->noflush = 1;
-    fi->fh = 0x808123456;
+    // fi->fh = 0x808123456;
+    
+    fi->fh = tcloud_drive_create(name, node->parent->cloud_id);
+
+    
 
     e.ino = (fuse_ino_t)n;
     e.attr.st_mode = S_IFREG | mode;
@@ -1108,6 +1113,7 @@ void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     struct tcloudfs_node *node = NULL;
+struct tcloud_drive_fd *fd = NULL;// fi->fh
     if (ino == FUSE_ROOT_ID) {
         node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
     } else {
@@ -1123,6 +1129,11 @@ void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
         printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         return;
     }
+    fd = (struct tcloud_drive_fd *)fi->fh;
+    if (!fd) {
+        fuse_reply_err(req, EBADF);
+        return;
+    }
 
     if (!S_ISREG(node->mode)) {
     }
@@ -1134,6 +1145,12 @@ void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
         node->ctime.tv_sec = time(NULL);
         node->mtime.tv_sec = time(NULL);
     }
+
+    // if size is 0, we should call truncate
+    //if (fd->size == 0 && node->size != 0) {
+        tcloud_drive_truncate(fd, node->size);
+    //}
+
 #if 0
     // size_t length =fuse_buf_size(buf);
     // do_write_buf(req, size, off, in_buf, fi);

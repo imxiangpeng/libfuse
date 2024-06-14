@@ -21,4 +21,8 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp * dir);
 struct tcloud_drive_fd *tcloud_drive_open(int64_t id);
 int tcloud_drive_release(struct tcloud_drive_fd *fd);
 size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, off_t offset);
+
+
+struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent);
+int tcloud_drive_truncate(struct tcloud_drive_fd *self, size_t size);
 #endif

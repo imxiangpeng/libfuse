@@ -1,5 +1,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include "hr_list.h"
 #endif
 #include <ctype.h>
 #include <curl/multi.h>
@@ -63,9 +64,13 @@
 
 #define TCLOUD_DRIVE_READ_BUFFER_SIZE (2 * 1024 * 1024)
 
-
 #define TCLOUD_REQUEST_POOL_SIZE (2)
 
+#ifndef MD5_DIGEST_LENGTH
+#define MD5_DIGEST_LENGTH 16
+#endif
+
+#define TCLOUD_DRIVE_RESERVE_ID -0xEF00000000000001
 // const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
 // const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
 
@@ -76,8 +81,17 @@ struct tcloud_drive {
     struct tcloud_request_pool *request_pool;  // api request pool
     pthread_mutex_t mutex;
 };
+
+enum tcloud_drive_fd_type {
+    TCLOUD_DRIVE_FD_DOWNLOAD = 0,
+    TCLOUD_DRIVE_FD_UPLOAD,
+};
+
 struct tcloud_drive_fd {
+    enum tcloud_drive_fd_type type;
     int64_t id;  // cloud id
+
+    size_t size;  // total file size
     CURLM *multi;
     CURL *curl;  // opened handle
     char *url;
@@ -92,6 +106,77 @@ struct tcloud_drive_fd {
     // but we do not support (libcurl)
     // also you can use -s to disable libfuse multi thread feature
     pthread_mutex_t mutex;
+
+    // upload ...
+    int is_eof;  // stream is end ?
+};
+
+// store read/write read
+struct tcloud_drive_data_chunk {
+    off_t offset;
+    size_t size;
+    struct hr_list_head entry;
+    char payload[];
+};
+
+struct tcloud_drive_upload_fd {
+    struct tcloud_drive_fd base;
+
+    char *name;       // file name
+    char *upload_id;  // allocated when initMultiUpload
+    // size_t total_size; // it should be set in set attr, upload must known full size
+    size_t split_slice_size;  // split slice size
+
+    // recoding current offset, it will be used to adjust chunk order
+    size_t sequence_processing_offset;
+
+    char md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+    EVP_MD_CTX *mdctx;
+
+    // current slice upload related ...
+    EVP_MD_CTX *slice_mdctx;
+    size_t slice_offset;
+    size_t slice_content_length;  // current slice size
+    // current slice md5 digest data
+    unsigned char slice_md5_digest[MD5_DIGEST_LENGTH];
+
+    // all slices summary
+    // store slice md5sum (hex upper string) joined with \n
+    struct tcloud_buffer slices_md5sum_data;
+    // slice md5sum when only one part
+    // or all slice md5sum data set's md5
+    char slices_md5sum[MD5_DIGEST_LENGTH * 2 + 1];
+
+    // condition for incoming queue
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+
+    int pending_length;
+
+    pthread_t tid;  // upload thread ...
+    // upload related ...
+    struct hr_list_head incoming_queue;  // write will queue data into this queue
+    struct hr_list_head upload_queue;    // upload thread dequeue from incoming queue and sort chunk into slice part, then upload it
+};
+
+#define TCLOUD_DRIVE_UPLOAD_PENDING_MAX (10)
+
+#define TCLOUD_DRIVE_UPLOAD_FD(self) container_of(self, struct tcloud_drive_upload_fd, base)
+#define TCLOUD_DRIVE_FD(self) (&self->base)
+//#define TCLOUD_DRIVE_DWLOAD_FD(self) container_of(self, struct tcloud_drive_upload_fd, base)
+
+// data of initMultiUpload
+struct response_init_multi_upload {
+    int type;
+    char *host;
+    char *id;
+    int exists;
+};
+
+// data of getMultiUploadUrls
+struct response_multi_upload_urls {
+    char *url;
+    char *header;
 };
 
 static struct tcloud_drive _drive;
@@ -347,76 +432,6 @@ static int _http_get(const char *url, struct curl_slist *headers, struct tcloud_
     return 0;
 }
 
-#if 0
-static int _tcloud_drive_http_get(const char *url, const char *payload, struct tcloud_buffer *buf) {
-    char *request_url = NULL;
-    struct curl_slist *headers = NULL;
-    char tmp[512] = {0};
-
-    // const char *secret = "FA3387A62BE630E89D18ABBCD4AF662E";
-    // const char* session_key = "0bdc1b48-b764-478d-8984-c1faccd99a78";
-    //  const char *secret = "FA75442F51DA58C650DAC77D9BB3DC5B";
-    // const char *session_key = "cbc87566-6cf2-47b9-b2f3-f3d48525a16b";
-    uuid_t uuid;
-    char request_id[UUID_STR_LEN + 20] = {0};
-
-    // X-Request-ID:
-    uuid_generate(uuid);
-    int pos = snprintf(request_id, sizeof(request_id), "%s", "X-Request-ID: ");
-    uuid_unparse(uuid, request_id + pos);
-    printf("Generated UUID: %s\n", request_id + pos);
-    headers = curl_slist_append(headers, request_id);
-
-    char date[64] = {0};
-    // Date:
-    http_gmt_date(date, sizeof(date));
-    snprintf(tmp, sizeof(tmp), "Date: %s", date);
-    headers = curl_slist_append(headers, tmp);
-
-    // Accept:
-    headers = curl_slist_append(headers, "Accept: application/json;charset=UTF-8");
-    // Referer:
-    headers = curl_slist_append(headers, "Referer: https://cloud.189.cn");
-
-    // Sessionkey:
-    snprintf(tmp, sizeof(tmp), "Sessionkey: %s", session_key);
-    headers = curl_slist_append(headers, tmp);
-
-    if (!payload) {
-        asprintf(&request_url, "%s?clientType=%s&version=%s&channelId=%s&rand=%d_%d", url, PC, VERSION, CHANNEL_ID, rand(), rand());
-    } else {
-        asprintf(&request_url, "%s?%s&clientType=%s&version=%s&channelId=%s&rand=%d_%d", url, payload, PC, VERSION, CHANNEL_ID, rand(), rand());
-    }
-
-    char *signature = signatureOfHmac(secret, session_key, "GET", url, date, NULL);
-    printf("signature:%s\n", signature);
-
-    int offset = strlen("Signature: ");
-    int val_len = strlen(signature);
-
-    void *ptr = realloc(signature, val_len + offset + 1);
-    if (!ptr) {
-        free(signature);
-        free(request_url);
-        return -1;
-    }
-    signature = ptr;
-    *(signature + val_len + offset) = '\0';
-    memcpy(signature + offset, signature, strlen(signature));
-    memcpy(signature, "Signature: ", offset);
-    headers = curl_slist_append(headers, signature);
-
-    int ret = _http_get(url, headers, buf);
-
-    HR_LOGD("%s(%d): code:%d result:%s\n", __FUNCTION__, __LINE__, ret, buf->data);
-
-    curl_slist_free_all(headers);
-
-    free(signature);
-    free(request_url);
-    return ret;
-}
-#endif
 static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri, struct tcloud_buffer *params) {
     char tmp[512] = {0};
     if (!req) return -1;
@@ -724,11 +739,11 @@ static int tcloud_drive_rename(const char *from, const char *to,
     return 0;
 }
 
-static int tcloud_drive_truncate(const char *path, off_t size,
-                                 struct fuse_file_info *fi) {
-    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-    return 0;
-}
+// static int tcloud_drive_truncate(const char *path, off_t size,
+//                                  struct fuse_file_info *fi) {
+//     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+//     return 0;
+// }
 static int tcloud_drive_utimens(const char *path, const struct timespec tv[2],
                                 struct fuse_file_info *fi) {
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
@@ -923,21 +938,108 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     HR_LOGD("%s(%d): ....out .....fd:%p. offset:%ld, size:%ld.\n", __FUNCTION__, __LINE__, fd, offset, size);
     return size;
 }
-
-static int tcloud_drive_write(const char *path, const char *wbuf, size_t size,
-                              off_t offset, struct fuse_file_info *fi) {
-    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-    printf("wbuffer:%s\n", wbuf);
-    return size;
-}
-
 // https://api.cloud.189.cn/newOpen/user/getUserInfo.action
 static int tcloud_drive_statfs(const char *path, struct statvfs *buf) {
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     return 0;
 }
-static int tcloud_drive_create(const char *path, mode_t mode,
-                               struct fuse_file_info *fi) {
+
+struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent) {
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+
+    struct tcloud_drive_upload_fd *fd = NULL;
+
+    if (!name) return NULL;
+
+    fd = (struct tcloud_drive_upload_fd *)calloc(1, sizeof(struct tcloud_drive_upload_fd));
+    if (!fd) return NULL;
+
+    fd->name = strdup(name);
+    // reserved id, id will be reset after commitMultiUploadFile
+    TCLOUD_DRIVE_FD(fd)->id = TCLOUD_DRIVE_RESERVE_ID;
+
+    tcloud_buffer_alloc(&fd->slices_md5sum_data, 512);
+
+    HR_INIT_LIST_HEAD(&fd->incoming_queue);
+    HR_INIT_LIST_HEAD(&fd->upload_queue);
+
+    pthread_mutex_init(&fd->mutex, NULL);
+    pthread_cond_init(&fd->cond, NULL);
+
+    fd->tid = 0;
+
+    return TCLOUD_DRIVE_FD(fd);
+}
+
+static void *_tcloud_drive_upload_routin(void *arg) {
+    return NULL;
+}
+int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t size, off_t offset) {
+    HR_LOGD("%s(%d): ........\n", __FUNCTION__, __LINE__);
+    struct hr_list_head *p = NULL;
+    struct tcloud_drive_upload_fd *fd = NULL;
+
+    struct tcloud_drive_data_chunk *ch = NULL;
+
+    if (!self || !data) return -1;
+    fd = TCLOUD_DRIVE_UPLOAD_FD(self);
+
+    if (self->type != TCLOUD_DRIVE_FD_UPLOAD) {
+        HR_LOGD("%s(%d): error not upload fd ........\n", __FUNCTION__, __LINE__);
+        return -EIO;
+    }
+    if (fd->tid == 0) {
+        int ret = pthread_create(&fd->tid, NULL, _tcloud_drive_upload_routin, fd);
+        if (ret != 0) {
+            return -EIO;
+        }
+    }
+
+    // append data bellow chunk directly
+    ch = (struct tcloud_drive_data_chunk *)calloc(1, sizeof(struct tcloud_drive_data_chunk) + size);
+    if (!ch) {
+        return -ENOMEM;
+    }
+
+    ch->offset = offset;
+    ch->size = size;
+    // ch->payload = (char *)ch + sizeof(struct tcloud_drive_data_chunk);
+    memcpy(ch->payload, data, size);
+
+    pthread_mutex_lock(&fd->mutex);
+    if (fd->pending_length > TCLOUD_DRIVE_UPLOAD_PENDING_MAX) {
+        HR_LOGD("%s(%d): reach max pending queue ........\n", __FUNCTION__, __LINE__);
+        pthread_cond_wait(&fd->cond, &fd->mutex);
+    }
+
+    fd->pending_length++;
+
+    hr_list_for_each_prev(p, &fd->incoming_queue) {
+        struct tcloud_drive_data_chunk *c1 = container_of(p, struct tcloud_drive_data_chunk, entry);
+        // HR_LOGD("%s(%d): cur :%p, HEAD:%p...current:%ld\n", __FUNCTION__, __LINE__, p, &_queue.head, c1->offset);
+
+        // the last should always bigger
+        if (c1->offset < ch->offset) {
+            // HR_LOGD("%s(%d): found cur :%p, HEAD:%p...current:%ld\n", __FUNCTION__, __LINE__, p, &_queue.head, c1->offset);
+            break;
+        }
+    }
+
+    hr_list_add(&ch->entry, p);
+
+    pthread_cond_signal(&fd->cond);
+    pthread_mutex_unlock(&fd->mutex);
+    return size;
+}
+
+// maybe called when create, we must known size before upload ...
+// see: initMultiUpload
+int tcloud_drive_truncate(struct tcloud_drive_fd *self, size_t size) {
+    // struct tcloud_drive_upload_fd * fd = NULL;
+    if (!self) return -1;
+    // fd = TCLOUD_DRIVE_UPLOAD_FD(self);
+
+    self->size = size;
+
     return 0;
 }
