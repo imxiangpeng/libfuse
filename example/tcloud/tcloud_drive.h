@@ -8,7 +8,15 @@
 
 #include "j2sobject_cloud.h"
 
-struct tcloud_drive_fd;
+struct tcloud_drive_fd {
+    int64_t id;  // cloud id
+    int64_t parent;
+
+    size_t size;  // total file size
+    // upload ...
+    int is_eof;  // stream is end ?
+    int /*enum tcloud_drive_fd_type*/ type;
+};
 
 int tcloud_drive_init(void);
 int tcloud_drive_destroy(void);
@@ -21,6 +29,7 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp * dir);
 struct tcloud_drive_fd *tcloud_drive_open(int64_t id);
 int tcloud_drive_release(struct tcloud_drive_fd *fd);
 size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, off_t offset);
+int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t size, off_t offset);
 
 
 struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent);

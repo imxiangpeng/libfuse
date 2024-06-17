@@ -158,6 +158,7 @@ static void deallocate_node(struct tcloudfs_node *node) {
     if (node->data) {
         tcloud_buffer_free(node->data);
         free(node->data);
+        node->data = NULL;
     }
 
     // 4. free self memory
@@ -878,11 +879,13 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     if (!is_valid_node(node)) {
         printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         return;
     }
 
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     HR_LOGD("%s(%d): create  %s at %s, with mode:%o\n", __FUNCTION__, __LINE__, name, node->name, mode);
     // we should get file id, maybe we should give it an invalid no, here
     struct tcloudfs_node *n = allocate_node(0xFF0000001, name, node);
@@ -893,9 +896,10 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     fi->noflush = 1;
     // fi->fh = 0x808123456;
     
-    fi->fh = tcloud_drive_create(name, node->parent->cloud_id);
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+    fi->fh = (uint64_t)tcloud_drive_create(name, node->cloud_id);
 
-    
+    printf("%s(%d): create fi->fh:%ld\n", __FUNCTION__, __LINE__, fi->fh);
 
     e.ino = (fuse_ino_t)n;
     e.attr.st_mode = S_IFREG | mode;
@@ -914,6 +918,7 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     // mxp, 20240607, use large timeout, fixed samba copy error!
     e.attr_timeout = 3;
     e.entry_timeout = 3;
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     fuse_reply_create(req, &e, fi);
 }
 static void tcloudfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
@@ -986,9 +991,7 @@ static void tcloudfs_release(fuse_req_t req, fuse_ino_t ino,
     }
 
     HR_LOGD("%s(%d): release %s\n", __FUNCTION__, __LINE__, node->name);
-    if (fi->fh != 0x808123456) {
-        tcloud_drive_release((struct tcloud_drive_fd *)fi->fh);
-    }
+    tcloud_drive_release((struct tcloud_drive_fd *)fi->fh);
     fuse_reply_err(req, 0);
 }
 
@@ -1129,12 +1132,15 @@ struct tcloud_drive_fd *fd = NULL;// fi->fh
         printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         return;
     }
+    printf("%s(%d): create fi->fh:%ld\n", __FUNCTION__, __LINE__, fi->fh);
     fd = (struct tcloud_drive_fd *)fi->fh;
     if (!fd) {
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
         fuse_reply_err(req, EBADF);
         return;
     }
 
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     if (!S_ISREG(node->mode)) {
     }
 
@@ -1146,10 +1152,15 @@ struct tcloud_drive_fd *fd = NULL;// fi->fh
         node->mtime.tv_sec = time(NULL);
     }
 
+    HR_LOGD("%s(%d): write file:%s  node size:%ld .....\n", __FUNCTION__, __LINE__, node->name, node->size);
     // if size is 0, we should call truncate
-    //if (fd->size == 0 && node->size != 0) {
+    if (fd->size == 0 && node->size != 0) {
         tcloud_drive_truncate(fd, node->size);
-    //}
+    }
+    
+    size = tcloud_drive_write(fd, buf, size, off);
+
+    HR_LOGD("%s(%d): write file:%s, offset:%ld, real size:%ld .....\n", __FUNCTION__, __LINE__, node->name, off, size);
 
 #if 0
     // size_t length =fuse_buf_size(buf);
@@ -1423,7 +1434,7 @@ static const struct fuse_lowlevel_ops tcloudfs_ops = {
     .open = tcloudfs_open,
     .ioctl = tcloudfs_ioctl,
     .write = tcloudfs_write,
-    .write_buf = tcloudfs_write_buf,  // not support
+    // .write_buf = tcloudfs_write_buf,  // not support
     .release = tcloudfs_release,
     .flush = tcloudfs_flush,
     .read = tcloudfs_read,
