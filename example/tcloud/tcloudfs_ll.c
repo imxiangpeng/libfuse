@@ -437,25 +437,25 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     }
 
     hr_list_for_each_entry(p, &node->childs, entry) {
-        // printf("%s(%d): node:%p,  child: id:%ld, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, S_ISDIR(p->mode));
+        printf("%s(%d): node:%p,  child: id:%ld, name:%s, dir:%d\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, S_ISDIR(p->mode));
         if (0 == strcmp(name, p->name)) {
-            // printf("got :%s\n", name);
+            printf("got :%s\n", name);
             e.attr.st_mode = p->mode /* | TCLOUDFS_DEFAULT_MODE*/;
             e.attr.st_ino = (fuse_ino_t)p;
             e.attr.st_nlink = S_ISDIR(p->mode) ? 1 : 2;
             e.attr.st_ctim = p->ctime;
             e.attr.st_mtim = p->mtime;
             e.attr.st_atim = p->atime;
-            // printf("got :%s, create time:%ld\n", name, e.attr.st_ctim.tv_sec);
-            // printf("got :%s, create time:%ld\n", name, p->ctime.tv_sec);
-            // printf("got :%s, m time:%ld\n", name, p->mtime.tv_sec);
+            printf("got :%s, create time:%ld\n", name, e.attr.st_ctim.tv_sec);
+            printf("got :%s, create time:%ld\n", name, p->ctime.tv_sec);
+            printf("got :%s, m time:%ld\n", name, p->mtime.tv_sec);
 
-            // printf("%s(%d): %s ctime:%ld, mtime:%ld, atime:%ld\n", __FUNCTION__, __LINE__, p->name, p->ctime.tv_sec, p->mtime.tv_sec, p->atime.tv_sec);
+            printf("%s(%d): %s ctime:%ld, mtime:%ld, atime:%ld\n", __FUNCTION__, __LINE__, p->name, p->ctime.tv_sec, p->mtime.tv_sec, p->atime.tv_sec);
             e.attr.st_size = p->size;
 
             e.attr.st_uid = _priv.opts.uid;
             e.attr.st_gid = _priv.opts.gid;
-            // printf("%s -> %ld, mode:%o, file size:%ld(%ld)\n", p->name, e.attr.st_size, e.attr.st_mode, p->size, p->truncate_size);
+            printf("%s -> %ld, mode:%o, file size:%ld(%ld)\n", p->name, e.attr.st_size, e.attr.st_mode, p->size, p->truncate_size);
 
             e.ino = (fuse_ino_t)p;
             fuse_reply_entry(req, &e);
@@ -591,12 +591,12 @@ static void tcloudfs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 
     if (valid & FUSE_SET_ATTR_ATIME) {
         HR_LOGD("%s(%d): set %s atime\n", __FUNCTION__, __LINE__, node->name);
-        node->atime = attr->st_atim;
+        //node->atime = attr->st_atim;
     }
 
     if (valid & FUSE_SET_ATTR_MTIME) {
         HR_LOGD("%s(%d): set %s ctime\n", __FUNCTION__, __LINE__, node->name);
-        node->mtime = attr->st_mtim;
+        // node->mtime = attr->st_mtim;
     }
 
     return tcloudfs_getattr(req, ino, fi);
@@ -771,6 +771,10 @@ static void tcloudfs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     struct tcloudfs_node *n = allocate_node(id, name, node);
     n->mode = S_IFDIR | mode;
 
+    n->ctime.tv_sec = time(NULL);
+    n->atime.tv_sec = time(NULL);
+    n->mtime.tv_sec = time(NULL);
+
     e.ino = (fuse_ino_t)n;
     e.attr.st_mode = n->mode;
     e.attr.st_size = 0;
@@ -943,13 +947,16 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     fi->fh = (uint64_t)tcloud_drive_create(name, node->cloud_id);
 
     printf("%s(%d): create fi->fh:%ld\n", __FUNCTION__, __LINE__, fi->fh);
+    n->ctime.tv_sec = time(NULL);
+    n->atime.tv_sec = time(NULL);
+    n->mtime.tv_sec = time(NULL);
 
     e.ino = (fuse_ino_t)n;
     e.attr.st_mode = S_IFREG | mode;
     e.attr.st_size = 0;
-    e.attr.st_ctim.tv_sec = time(NULL);
-    e.attr.st_atim.tv_sec = time(NULL);
-    e.attr.st_mtim.tv_sec = time(NULL);
+    e.attr.st_ctim.tv_sec = n->ctime.tv_sec;
+    e.attr.st_atim.tv_sec = n->atime.tv_sec;
+    e.attr.st_mtim.tv_sec = n->mtime.tv_sec;
 
     e.attr.st_blksize = 4096;
     e.attr.st_blocks = node->size / e.attr.st_blksize;
