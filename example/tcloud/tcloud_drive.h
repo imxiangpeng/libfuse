@@ -25,6 +25,7 @@ int tcloud_drive_storage_statfs(struct statvfs *st);
 
 int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct timespec *ctime);
 int64_t tcloud_drive_mkdir(int64_t parent, const char* name);
+int tcloud_drive_rmdir(int64_t id, const char* name);
 int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp * dir);
 struct tcloud_drive_fd *tcloud_drive_open(int64_t id);
 int tcloud_drive_release(struct tcloud_drive_fd *fd);
@@ -34,4 +35,5 @@ int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t si
 
 struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent);
 int tcloud_drive_truncate(struct tcloud_drive_fd *self, size_t size);
+int tcloud_drive_unlink(int64_t id, const char* name);
 #endif

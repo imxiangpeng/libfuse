@@ -177,6 +177,7 @@ static struct tcloud_drive _drive;
 
 static struct tcloud_drive_fd *_tcloud_drive_fd_allocate(enum tcloud_drive_fd_type type);
 static void _tcloud_drive_fd_deallocate(struct tcloud_drive_fd *fd);
+static int _tcloud_drive_batch_task(const char *type, const char *taskinfo);
 
 static long long time_ms() {
     struct timespec ts;
@@ -800,9 +801,31 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
     return id;
 }
 
-static int tcloud_drive_rmdir(const char *path) {
+int tcloud_drive_rmdir(int64_t id, const char *name) {
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-    return 0;
+    int rc = 0;
+
+    char tmp[128] = {0};
+
+    struct json_object *root = NULL, *task = NULL, *task_id = NULL;
+
+    root = json_object_new_array();
+    task = json_object_new_object();
+    json_object_array_add(root, task);
+
+    snprintf(tmp, sizeof(tmp), "%ld", id);
+    json_object_object_add(task, "fileId", json_object_new_string(tmp));
+    // no need
+    char *escape_name = curl_easy_escape(NULL, name, 0);
+    json_object_object_add(task, "fileName", json_object_new_string(escape_name));
+    curl_free(escape_name);
+    json_object_object_add(task, "isFolder", json_object_new_int(1));
+
+    rc = _tcloud_drive_batch_task("DELETE", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+
+    json_object_put(root);
+
+    return rc;
 }
 
 static int tcloud_drive_rename(const char *from, const char *to,
@@ -1510,7 +1533,7 @@ static void *_tcloud_drive_upload_routin(void *arg) {
 
         // current chunk is not order! wait next chunk come in
         if (fd->sequence_processing_offset != ch->offset) {
-        HR_LOGD("%s(%d): incoming chunk offset:%ld, size: %ld  offset not matched...\n", __FUNCTION__, __LINE__, ch->offset, ch->size);
+            HR_LOGD("%s(%d): incoming chunk offset:%ld, size: %ld  offset not matched...\n", __FUNCTION__, __LINE__, ch->offset, ch->size);
             pthread_cond_wait(&fd->cond, &fd->mutex);
             pthread_mutex_unlock(&fd->mutex);
             continue;
@@ -1785,6 +1808,33 @@ int tcloud_drive_truncate(struct tcloud_drive_fd *self, size_t size) {
     return 0;
 }
 
+int tcloud_drive_unlink(int64_t id, const char *name) {
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+    int rc = 0;
+
+    char tmp[128] = {0};
+
+    struct json_object *root = NULL, *task = NULL, *task_id = NULL;
+
+    root = json_object_new_array();
+    task = json_object_new_object();
+    json_object_array_add(root, task);
+
+    snprintf(tmp, sizeof(tmp), "%ld", id);
+    json_object_object_add(task, "fileId", json_object_new_string(tmp));
+    // no need
+    char *escape_name = curl_easy_escape(NULL, name, 0);
+    json_object_object_add(task, "fileName", json_object_new_string(escape_name));
+    curl_free(escape_name);
+    json_object_object_add(task, "isFolder", json_object_new_int(0));
+
+    rc = _tcloud_drive_batch_task("DELETE", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+
+    json_object_put(root);
+
+    return rc;
+}
+
 static struct tcloud_drive_fd *_tcloud_drive_fd_allocate(enum tcloud_drive_fd_type type) {
     switch (type) {
         case TCLOUD_DRIVE_FD_DOWNLOAD: {
@@ -1847,4 +1897,54 @@ static void _tcloud_drive_fd_deallocate(struct tcloud_drive_fd *fd) {
         default:
             break;
     }
+}
+
+// type:
+// task: json string
+static int _tcloud_drive_batch_task(const char *type, const char *taskinfo) {
+    struct json_object *root = NULL, *res_code = NULL, *task_id = NULL;
+    struct tcloud_buffer b;
+    struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
+
+    const char *action = "/batch/createBatchTask.action";
+
+    tcloud_buffer_alloc(&b, 512);
+
+    req->method = TR_METHOD_POST;
+    req->set_form(req, "type", type);
+    req->set_form(req, "taskInfos", taskinfo);
+
+    json_object_put(root);
+
+    int ret = _tcloud_drive_fill_final(req, action, NULL);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        _drive.request_pool->release(_drive.request_pool, req);
+        return ret;
+    }
+
+    req->post(req, API_URL "/batch/createBatchTask.action", &b, NULL);
+
+    _drive.request_pool->release(_drive.request_pool, req);
+
+    printf("data:%s\n", b.data);
+    root = json_tokener_parse(b.data);
+    tcloud_buffer_free(&b);
+    if (!root) {
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+    json_object_object_get_ex(root, "res_code", &res_code);
+    if (!res_code || json_object_get_int(res_code) != 0) {
+        json_object_put(root);
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+
+    json_object_object_get_ex(root, "taskId", &task_id);
+    printf("%s(%d): task id:%s...\n", __FUNCTION__, __LINE__, json_object_get_string(task_id));
+    json_object_put(root);
+    root = NULL;
+
+    return 0;
 }

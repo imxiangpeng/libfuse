@@ -80,7 +80,7 @@ int tcloud_buffer_reset(struct tcloud_buffer *buf) {
     if (!buf || !buf->data)
         return -1;
     buf->offset = 0;
-    // memset((void *)buf->data, 0, buf->size);
+    memset((void *)buf->data, 0, buf->size);
 
     return 0;
 }

@@ -28,7 +28,8 @@ struct tcloud_request_priv {
     // tcloud_request_method_e type;
     int allow_redirect;  // allow redirect
     struct hr_list_head query;
-    struct hr_list_head form;
+    // struct hr_list_head form;
+    struct tcloud_buffer form;
     struct curl_slist *headers;
     // char *url
     // char url[];  // input url is appended end
@@ -139,17 +140,25 @@ static int _set_query(struct tcloud_request *req, const char *name, const char *
 }
 
 static int _set_form(struct tcloud_request *req, const char *name, const char *val) {
-    struct tcloud_param *param = NULL;
+    // struct tcloud_param *param = NULL;
     struct tcloud_request_priv *priv = (struct tcloud_request_priv *)req;
 
     if (!priv || !name) return -1;
-
+#if 0
     param = (struct tcloud_param *)calloc(1, sizeof(struct tcloud_param));
     HR_INIT_LIST_HEAD(&param->entry);
 
     asprintf(&param->value, "%s=%s", name, val ? val : "");
 
     hr_list_add_tail(&param->entry, &priv->form);
+#endif
+    if (priv->form.offset != 0) {
+        tcloud_buffer_append_string(&priv->form, "&");
+    }
+
+    tcloud_buffer_append_string(&priv->form, name);
+    tcloud_buffer_append_string(&priv->form, "=");
+    tcloud_buffer_append_string(&priv->form, val);
 
     return 0;
 }
@@ -229,25 +238,13 @@ static int _http_request(struct tcloud_request *req, const char *url, struct tcl
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
     }
 
+    if (TR_METHOD_GET == req->method) {
+        curl_easy_setopt(curl, CURLOPT_POST, 0L);
+    }
     if (TR_METHOD_POST == req->method) {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        int len = 1;  // end '\0'
-        hr_list_for_each_entry(p, &priv->form, entry) {
-            len += strlen(p->value);
-        }
-        payload = (char *)calloc(1, len);
-
-        // release memory directly ...
-        // because request maybe reused!
-        hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
-            payload = strcat(payload, p->value);
-            if (p->value) free(p->value);
-            hr_list_del(&p->entry);
-            free(p);
-        }
-
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, len - 1);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, priv->form.data);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, priv->form.offset);
     }
 
     // follow redirect
@@ -263,6 +260,15 @@ static int _http_request(struct tcloud_request *req, const char *url, struct tcl
         curl_url_cleanup(_curl);
     }
 
+    // clean memory, because we may use this socket to other request
+
+    if (priv->headers) {
+        curl_slist_free_all(priv->headers);
+        priv->headers = NULL;
+    }
+
+    tcloud_buffer_reset(&priv->form);
+
     if (rc != CURLE_OK) {
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(rc));
         fprintf(stderr, "curl_easy_perform() url: %s\n", url);
@@ -272,18 +278,6 @@ static int _http_request(struct tcloud_request *req, const char *url, struct tcl
     curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &redirect_url);
     curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &redirect_url);
     if (redirect_url != NULL) {
-    }
-
-    // clean memory, because we may use this socket to other request
-
-    if (priv->headers) {
-        curl_slist_free_all(priv->headers);
-        priv->headers = NULL;
-    }
-    hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
-        if (p->value) free(p->value);
-        hr_list_del(&p->entry);
-        free(p);
     }
 
     return 0;
@@ -327,9 +321,9 @@ static int _http_do_put(struct tcloud_request *req, const char *url, struct tclo
     HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
     if (hr_list_empty(&priv->query)) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
-    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+        HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
     } else {
-    HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
+        HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
         _curl = curl_url();
         curl_url_set(_curl, CURLUPART_URL, url, 0);
         // release memory directly ...
@@ -359,11 +353,11 @@ static int _http_do_put(struct tcloud_request *req, const char *url, struct tclo
     curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
     curl_easy_setopt(curl, CURLOPT_READDATA, (void *)args);
     curl_easy_setopt(curl, CURLOPT_INFILESIZE, size);
- 
+
     HR_LOGD("%s(%d): response url:%s\n", __FUNCTION__, __LINE__, url);
-    
-     /* enable all supported built-in compressions */
-    // curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");   
+
+    /* enable all supported built-in compressions */
+    // curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
 
     // follow redirect
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
@@ -400,12 +394,8 @@ static int _http_do_put(struct tcloud_request *req, const char *url, struct tclo
         curl_slist_free_all(priv->headers);
         priv->headers = NULL;
     }
-    hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
-        if (p->value) free(p->value);
-        hr_list_del(&p->entry);
-        free(p);
-    }
 
+    tcloud_buffer_reset(&priv->form);
     return 0;
 }
 struct tcloud_request *tcloud_request_new(void) {
@@ -431,7 +421,8 @@ struct tcloud_request *tcloud_request_new(void) {
 
     priv->headers = NULL;
     HR_INIT_LIST_HEAD(&priv->query);
-    HR_INIT_LIST_HEAD(&priv->form);
+    // HR_INIT_LIST_HEAD(&priv->form);
+    tcloud_buffer_alloc(&priv->form, 64);
 
     // init for pool
     HR_INIT_LIST_HEAD(&priv->pool_entry);
@@ -459,12 +450,14 @@ void tcloud_request_free(struct tcloud_request *req) {
         hr_list_del(&p->entry);
         free(p);
     }
-
+#if 0
     hr_list_for_each_entry_safe(p, n, &priv->form, entry) {
         if (p->value) free(p->value);
         hr_list_del(&p->entry);
         free(p);
     }
+#endif
+    tcloud_buffer_free(&priv->form);
 
     HR_INIT_LIST_HEAD(&priv->pool_entry);
     free(priv);
