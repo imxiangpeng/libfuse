@@ -15,12 +15,10 @@ struct tcloud_request {
     int (*set_form)(struct tcloud_request *, const char *, const char *);
     int (*set_header)(struct tcloud_request *, const char *, const char *);
     int (*allow_redirect)(struct tcloud_request *, int);
-    int (*get)(struct tcloud_request *, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h);
-    int (*post)(struct tcloud_request *, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h);
+    int (*get)(struct tcloud_request *, const char *url, struct tcloud_buffer *b);
+    int (*post)(struct tcloud_request *, const char *url, struct tcloud_buffer *b);
     int (*put)(struct tcloud_request *, const char *url, struct tcloud_buffer *b, size_t size, size_t (*read_callback)(void *ptr, size_t size, size_t nmemb, void *userdata), void *args);
-    int (*request)(struct tcloud_request *, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h);
-    int (*request_aio)(struct tcloud_request *, const char *url, struct tcloud_buffer *b, struct tcloud_buffer *h);
-    // int (*request_params)(struct tcloud_request *, struct tcloud_buffer *b, struct tcloud_buffer *h);
+    int (*request)(struct tcloud_request *, const char *url, struct tcloud_buffer *b);
 };
 
 struct tcloud_request_pool {

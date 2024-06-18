@@ -177,109 +177,10 @@ static struct tcloud_drive _drive;
 
 static struct tcloud_drive_fd *_tcloud_drive_fd_allocate(enum tcloud_drive_fd_type type);
 static void _tcloud_drive_fd_deallocate(struct tcloud_drive_fd *fd);
-static int _tcloud_drive_batch_task(const char *type, const char *taskinfo);
+static int _tcloud_drive_batch_task(const char *type, int64_t target_dir, const char *taskinfo);
 
-static long long time_ms() {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) == -1) {
-        perror("clock_gettime");
-        return -1;
-    }
-    return (ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
-}
-static char *request_url_path(const char *url) {
-    const char *start = strstr(url, "://");
-    if (!start) {
-        return NULL;
-    }
-    start += 3;  // skip "://"
-    const char *path_start = strchr(start, '/');
-    if (!path_start) {
-        path_start = "/";
-    }
+#if 0
 
-    const char *query_start = strchr(path_start, '?');
-    size_t path_len = query_start ? (size_t)(query_start - path_start) : strlen(path_start);
-
-    char *path = (char *)malloc(path_len + 1);
-    if (!path) {
-        return NULL;
-    }
-    strncpy(path, path_start, path_len);
-    path[path_len] = '\0';
-    return path;
-}
-
-int http_gmt_date(char *buffer, size_t length) {
-    time_t rawtime;
-    struct tm *timeinfo;
-
-    if (buffer == NULL) {
-        return -1;
-    }
-
-    time(&rawtime);
-    timeinfo = gmtime(&rawtime);
-
-    if (strftime(buffer, length, "%a, %d %b %Y %H:%M:%S GMT", timeinfo) == 0) {
-        return -1;
-    }
-
-    return 0;
-}
-
-void to_uppercase(char *str) {
-    while (*str) {
-        *str = toupper((unsigned char)*str);
-        str++;
-    }
-}
-char *signatureOfHmac(const char *sessionSecret, const char *sessionKey, const char *operate, const char *fullUrl, const char *dateOfGmt, const char *param) {
-    char *urlPath = request_url_path(fullUrl);
-    if (!urlPath) {
-        return NULL;
-    }
-
-    printf("url %s -> %s\n", fullUrl, urlPath);
-    int data_len = strlen(sessionKey) + strlen(operate) + strlen(urlPath) + strlen(dateOfGmt) + 50;
-    if (param && strlen(param) > 0) {
-        data_len += strlen(param) + 9;  // +9 for "&params="
-    }
-
-    char *data = (char *)malloc(data_len);
-    if (!data) {
-        free(urlPath);
-        return NULL;
-    }
-
-    if (param && strlen(param) > 0) {
-        snprintf(data, data_len, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s&params=%s", sessionKey, operate, urlPath, dateOfGmt, param);
-    } else {
-        snprintf(data, data_len, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", sessionKey, operate, urlPath, dateOfGmt);
-    }
-
-    printf("data:%s\n", data);
-    free(urlPath);
-
-    unsigned char *result;
-    unsigned int len = SHA_DIGEST_LENGTH;
-
-    result = HMAC(EVP_sha1(), sessionSecret, strlen(sessionSecret), (unsigned char *)data, strlen(data), NULL, NULL);
-    free(data);
-
-    char *hex_result = (char *)malloc(len * 2 + 1);
-    if (!hex_result) {
-        return NULL;
-    }
-
-    for (unsigned int i = 0; i < len; i++) {
-        sprintf(hex_result + i * 2, "%02X", result[i]);
-    }
-    hex_result[len * 2] = '\0';
-
-    to_uppercase(hex_result);
-    return hex_result;
-}
 static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
                             void *userdata) {
     struct tcloud_buffer *buf = (struct tcloud_buffer *)userdata;
@@ -291,37 +192,36 @@ static size_t _data_receive(void *ptr, size_t size, size_t nmemb,
     return total;
 }
 
-static size_t _download_receive(void *ptr, size_t size, size_t nmemb,
-                                void *userdata) {
+#endif
+
+static char *_hex_to_string(const char *data, size_t len) {
+    int size = 0;
+    size_t offset = 0;
+    char *ptr = NULL;
+    if (!data) return NULL;
+
+    size = len * 2 + 1;
+
+    ptr = (char *)calloc(1, size);
+    if (!ptr) return NULL;
+
+    for (int i = 0; i < len; i++) {
+        int rc = snprintf(ptr + offset, size - offset, "%02x", data[i] & 0xFF);
+        offset += rc;
+    }
+
+    return ptr;
+}
+
+static size_t _tcloud_drive_download_receive(void *ptr, size_t size, size_t nmemb, void *userdata) {
     struct tcloud_drive_download_fd *fd = (struct tcloud_drive_download_fd *)userdata;
     struct tcloud_buffer *b = NULL;
     size_t total = size * nmemb;
-    // HR_LOGD("%s(%d): write:%u\n", __FUNCTION__, __LINE__, total);
+
     if (!ptr || !userdata)
         return total;  // drop all data
 
     b = &fd->cache;
-
-#if 0
-    if (fd->fd == 0) {
-        char path[256] = {0};
-        snprintf(path, sizeof(path),
-                 "/home/alex/workspace/workspace/libfuse/libfuse/build/"
-                 "./dump_%p_%ld",
-                 (void *)fd, time(NULL));
-        printf("mxp, create:%s\n", path);
-        fd->fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-        printf("mxp, create:%s -> %d\n", path, fd->fd);
-    }
-
-    if (fd->fd > 0) {
-        int ret = write(fd->fd, ptr, total);
-        if (ret < 0) {
-            perror("write failed:\n");
-        }
-        printf("mxp, write:%d -> %s\n", ret, strerror(errno));
-    }
-#endif
 
     if (b->size - b->offset < total) {
         // HR_LOGD("%s(%d):not enough, auto pause total:%ld\n", __FUNCTION__, __LINE__, total);
@@ -332,121 +232,6 @@ static size_t _download_receive(void *ptr, size_t size, size_t nmemb,
     tcloud_buffer_append(b, ptr, total);
 
     return total;
-}
-
-int http_post(const char *url, struct curl_slist *headers, const char *payload, size_t payload_length, struct tcloud_buffer *result) {
-    CURL *curl;
-    CURLcode res;
-    curl_mime *form = NULL;
-    curl_mimepart *field = NULL;
-
-    curl = curl_easy_init();
-    if (curl) {
-        // curl_easy_setopt(curl, CURLOPT_URL, /*AUTH_URL*/ "http://10.30.11.78/api/logbox/oauth2/loginSubmit.do");
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, result);
-
-        // follow redirect
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-
-        // char postFields[2048];
-        // snprintf(postFields, sizeof(postFields),
-        //          "appKey=%s&accountType=%s&userName=%s&password=%s&validateCode=%s&captchaToken=%s&returnUrl=%s"
-        //          "&dynamicCheck=FALSE&clientType=%s&cb_SaveName=1&isOauth2=false&state=&paramId=%s",
-        //          APP_ID, ACCOUNT_TYPE, rsaUsername, rsaPassword, vcode, captchaToken, RETURN_URL, CLIENT_TYPE, paramId);
-
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, payload_length);
-        res = curl_easy_perform(curl);
-
-        if (res != CURLE_OK) {
-            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-        } else {
-            printf("%lu bytes retrieved\n", (unsigned long)result->offset);
-            printf("Response: %s\n", result->data);
-        }
-
-        curl_mime_free(form);
-        curl_easy_cleanup(curl);
-        curl_slist_free_all(headers);
-    }
-
-    return 0;
-}
-
-int http_post_j2sobject_result(const char *url, struct curl_slist *headers, const char *payload, size_t payload_length, struct j2sobject *result) {
-    struct tcloud_buffer buffer;
-
-    tcloud_buffer_alloc(&buffer, 2048);
-
-    int ret = http_post(url, headers, payload, payload_length, &buffer);
-    printf("ret:%d\n", ret);
-    if (ret == 0) {
-        printf("response json data:%s\n", buffer.data);
-        ret = j2sobject_deserialize(result, buffer.data);
-        printf("ret:%d\n", ret);
-    }
-    tcloud_buffer_free(&buffer);
-
-    return ret;
-}
-
-static int _http_get(const char *url, struct curl_slist *headers, struct tcloud_buffer *result) {
-    CURL *curl;
-    CURLcode res;
-    long response_code = 0;
-
-    curl = curl_easy_init();
-    if (!curl) {
-        return -1;
-    }
-
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    if (headers)
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _data_receive);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, result);
-
-    // follow redirect
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-
-    res = curl_easy_perform(curl);
-
-    if (res != CURLE_OK) {
-        curl_easy_cleanup(curl);
-        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-        return -1;
-    }
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-    printf("code:%d, response code:%ld\n", CURLE_OK, response_code);
-    printf("%lu bytes retrieved\n", (unsigned long)result->offset);
-    printf("Response: %s\n", result->data);
-
-    curl_easy_cleanup(curl);
-
-    return 0;
-}
-
-static char *_hex_to_string(const char *data, size_t len) {
-    int size = 0;
-    size_t offset = 0;
-    char *ptr = NULL;
-    if (!data) return NULL;
-
-    size = len * 2 + 1;
-
-    ptr = (unsigned char *)calloc(1, size);
-    if (!ptr) return NULL;
-
-    for (int i = 0; i < len; i++) {
-        int rc = snprintf(ptr + offset, size - offset, "%02x", data[i] & 0xFF);
-        offset += rc;
-    }
-
-    return ptr;
 }
 
 static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri, struct tcloud_buffer *params) {
@@ -503,47 +288,6 @@ static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri,
 
     return 0;
 }
-#if 0
-static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri, struct tcloud_buffer *params) {
-    char tmp[512] = {0};
-    if (!req) return -1;
-
-    char uuid[UUID_STR_LEN] = {0};
-    tcloud_utils_generate_uuid(uuid, sizeof(uuid));
-
-    char date[64] = {0};
-    tcloud_utils_http_date_string(date, sizeof(date));
-
-    req->set_header(req, "Accept", "application/json;charset=UTF-8");
-    req->set_header(req, "Date", date);
-    req->set_header(req, "SessionKey", session_key);
-    req->set_header(req, "X-Request-ID", uuid);
-
-    char *signature_data = NULL;
-    if (params) {
-        asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s&params=%s", session_key, req->method == TR_METHOD_GET ? "GET" : "POST", uri, date, params->data);
-    } else {
-        asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session_key, req->method == TR_METHOD_GET ? "GET" : "POST", uri, date);
-    }
-
-    HR_LOGD("%s(%d): signature data:%s\n", __FUNCTION__, __LINE__, signature_data);
-    char *signature = tcloud_utils_hmac_sha1(secret, (const unsigned char *)signature_data, strlen(signature_data));
-    HR_LOGD("%s(%d): signature:%s\n", __FUNCTION__, __LINE__, signature);
-    req->set_header(req, "Signature", signature);
-    free(signature_data);
-    free(signature);
-
-    req->set_header(req, "Referer", "https://cloud.189.cn");
-
-    req->set_query(req, "clientType", "TELEPC");
-    req->set_query(req, "version", "6.2");
-    req->set_query(req, "channelId", "web_cloud.189.cn");
-    snprintf(tmp, sizeof(tmp), "%d_%d", rand(), rand());
-    req->set_query(req, "rand", tmp);
-
-    return 0;
-}
-#endif
 
 int tcloud_drive_init(void) {
     curl_global_init(CURL_GLOBAL_ALL);
@@ -567,14 +311,15 @@ int tcloud_drive_storage_statfs(struct statvfs *st) {
 
     tcloud_buffer_alloc(&b, 512);
 
-    int ret = _tcloud_drive_fill_final(req, "/getUserInfo.action", NULL);
+    req->method = TR_METHOD_GET;
+    int ret = _tcloud_drive_fill_final(req, action, NULL);
     if (ret != 0) {
         tcloud_buffer_free(&b);
         _drive.request_pool->release(_drive.request_pool, req);
         return ret;
     }
 
-    req->get(req, API_URL "/getUserInfo.action", &b, NULL);
+    req->request(req, API_URL "/getUserInfo.action", &b);
 
     _drive.request_pool->release(_drive.request_pool, req);
 
@@ -615,6 +360,7 @@ int tcloud_drive_storage_statfs(struct statvfs *st) {
 int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct timespec *ctime) {
     printf("%s(%d): id:%ld, type:%d\n", __FUNCTION__, __LINE__, id, type);
 
+    char *url = NULL;
     struct json_object *root = NULL, *res_code = NULL;
     struct tcloud_buffer b;
 
@@ -624,8 +370,6 @@ int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct ti
 
     tcloud_buffer_alloc(&b, 512);
 
-    // req->set_query(req, "folderId", "-11");
-    char *url = NULL;
     asprintf(&url, API_URL "%s?folderId=%ld", action, id);
     if (!url) return -1;
 
@@ -636,7 +380,7 @@ int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct ti
         return ret;
     }
 
-    req->get(req, url, &b, NULL);
+    req->get(req, url, &b);
     _drive.request_pool->release(_drive.request_pool, req);
 
     free(url);
@@ -663,11 +407,6 @@ int tcloud_drive_getattr(int64_t id, int type, struct timespec *atime, struct ti
     return 0;
 }
 
-static int tcloud_drive_access(const char *path, int mask) {
-    printf("%s(%d): ........path:%s\n", __FUNCTION__, __LINE__, path);
-    return 0;
-}
-
 // Referer: https://cloud.189.cn
 // Sessionkey: 2f66d7f1-af6a-4a7b-a3b9-e81640c0b44d
 // Signature: 3D40EFF921EB4110B73386D195DDE7B3905646E3
@@ -679,7 +418,6 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
     int page_num = 1;
     int page_size = 100;
 
-    char tmp[256] = {0};
     struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
     const char *action = "/listFiles.action";
 
@@ -718,7 +456,7 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
 
     printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
 
-    ret = req->request(req, url, &b, NULL);
+    ret = req->request(req, url, &b);
     _drive.request_pool->release(_drive.request_pool, req);
     free(url);
     printf("%s(%d): ...ret:%d.......\n", __FUNCTION__, __LINE__, ret);
@@ -735,12 +473,6 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
     tcloud_buffer_free(&b);
 
     return ret;
-}
-
-static int tcloud_drive_releasedir(const char *path,
-                                   struct fuse_file_info *fi) {
-    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-    return 0;
 }
 
 int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
@@ -772,7 +504,7 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
         return ret;
     }
 
-    ret = req->request(req, url, &b, NULL);
+    ret = req->request(req, url, &b);
     _drive.request_pool->release(_drive.request_pool, req);
     free(url);
     if (ret != 0) {
@@ -802,12 +534,9 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
 }
 
 int tcloud_drive_rmdir(int64_t id, const char *name) {
-    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     int rc = 0;
-
     char tmp[128] = {0};
-
-    struct json_object *root = NULL, *task = NULL, *task_id = NULL;
+    struct json_object *root = NULL, *task = NULL;
 
     root = json_object_new_array();
     task = json_object_new_object();
@@ -821,16 +550,91 @@ int tcloud_drive_rmdir(int64_t id, const char *name) {
     curl_free(escape_name);
     json_object_object_add(task, "isFolder", json_object_new_int(1));
 
-    rc = _tcloud_drive_batch_task("DELETE", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+    rc = _tcloud_drive_batch_task("DELETE", 0, json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
 
     json_object_put(root);
 
     return rc;
 }
 
-static int tcloud_drive_rename(const char *from, const char *to,
-                               unsigned int flags) {
-    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+int tcloud_drive_rename(int64_t id, const char *name, unsigned int flags) {
+    printf("%s(%d): .....rename %ld -> %s with flags:0x%X ...\n", __FUNCTION__, __LINE__, id, name, flags);
+
+    int rc = 0;
+
+    char tmp[128] = {0};
+#if 0
+    struct json_object *root = NULL, *task = NULL, *task_id = NULL;
+
+    root = json_object_new_array();
+    task = json_object_new_object();
+    json_object_array_add(root, task);
+
+    snprintf(tmp, sizeof(tmp), "%ld", id);
+    json_object_object_add(task, "fileId", json_object_new_string(tmp));
+    // no need
+    // char *escape_name = curl_easy_escape(NULL, name, 0);
+    // json_object_object_add(task, "fileName", json_object_new_string(escape_name));
+    // curl_free(escape_name);
+    json_object_object_add(task, "isFolder", json_object_new_int(0));
+
+    rc = _tcloud_drive_batch_task("DELETE", 0, json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+
+    json_object_put(root);
+#endif
+    char *url = NULL;
+    struct tcloud_buffer b;
+    struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
+    const char *action = "/renameFile.action";
+    struct json_object *root = NULL, *res_code = NULL;
+
+    if (!name) return -1;
+
+    snprintf(tmp, sizeof(tmp), "%ld", id);
+    if (flags == 1) {
+        action = "/renameFolder.action";
+        req->set_query(req, "folderId", tmp);
+        req->set_query(req, "destFolderName", name);
+    } else {
+        req->set_query(req, "fileId", tmp);
+        req->set_query(req, "destFileName", name);
+    }
+
+    asprintf(&url, API_URL "%s", action);
+
+    if (!url) return -1;
+
+    tcloud_buffer_alloc(&b, 512);
+    req->method = TR_METHOD_GET;
+    int ret = _tcloud_drive_fill_final(req, action, NULL);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        _drive.request_pool->release(_drive.request_pool, req);
+        return ret;
+    }
+
+    ret = req->request(req, url, &b);
+    _drive.request_pool->release(_drive.request_pool, req);
+    free(url);
+    if (ret != 0) {
+        tcloud_buffer_free(&b);
+        return ret;
+    }
+
+    HR_LOGD("%s(%d): ret:%d -> %s\n", __FUNCTION__, __LINE__, ret, b.data);
+    root = json_tokener_parse(b.data);
+    tcloud_buffer_free(&b);
+    if (!root) {
+        printf(" can not parse json .....\n");
+        return -1;
+    }
+
+    json_object_object_get_ex(root, "res_code", &res_code);
+    if (!res_code || json_object_get_int(res_code) != 0) {
+        json_object_put(root);
+        printf(" can not parse json .....\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -883,7 +687,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
         return NULL;
     }
 
-    ret = req->request(req, url, &b, NULL);
+    ret = req->request(req, url, &b);
     _drive.request_pool->release(_drive.request_pool, req);
     free(url);
     if (ret != 0) {
@@ -910,7 +714,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
 
             curl_multi_add_handle(fd->multi, fd->curl);
             curl_easy_setopt(fd->curl, CURLOPT_URL, fd->url);
-            curl_easy_setopt(fd->curl, CURLOPT_WRITEFUNCTION, _download_receive);
+            curl_easy_setopt(fd->curl, CURLOPT_WRITEFUNCTION, _tcloud_drive_download_receive);
             curl_easy_setopt(fd->curl, CURLOPT_WRITEDATA, fd);
             // follow redirect
             curl_easy_setopt(fd->curl, CURLOPT_FOLLOWLOCATION, 1);
@@ -1146,7 +950,7 @@ int init_multi_upload(struct tcloud_drive_upload_fd *fd, struct response_init_mu
     _tcloud_drive_fill_final(req, action, &b);
 
     tcloud_buffer_reset(&b);
-    req->request(req, url, &b, NULL);
+    req->request(req, url, &b);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
 
@@ -1216,7 +1020,7 @@ int get_multi_upload_urls(const char *id, int part, const char *md5_base64, stru
     _tcloud_drive_fill_final(req, action, &b);
 
     tcloud_buffer_reset(&b);
-    req->request(req, url, &b, NULL);
+    req->request(req, url, &b);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
 
@@ -1291,6 +1095,7 @@ static int do_stream_upload(struct tcloud_drive_upload_fd *fd) {
 
     struct tcloud_buffer b;
     struct tcloud_request *req = NULL;
+    char tmp[128] = {0};
 
     if (!fd) return -1;
     memset((void *)&res, 0, sizeof(res));
@@ -1338,9 +1143,6 @@ static int do_stream_upload(struct tcloud_drive_upload_fd *fd) {
     }
 
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
-    char tmp[128] = {0};
-    // snprintf(tmp, sizeof(tmp), "%ld", upload->content_length);
-    // req->set_header(req, "Content-Length", tmp);
     req->set_header(req, "Expect", NULL);
 
     req->set_header(req, "Accept", "application/json;charset=UTF-8");
@@ -1400,7 +1202,7 @@ static int do_commit_upload(struct tcloud_drive_upload_fd *fd) {
     _tcloud_drive_fill_final(req, action, &b);
 
     tcloud_buffer_reset(&b);
-    req->request(req, url, &b, NULL);
+    req->request(req, url, &b);
     tcloud_request_free(req);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
@@ -1828,7 +1630,7 @@ int tcloud_drive_unlink(int64_t id, const char *name) {
     curl_free(escape_name);
     json_object_object_add(task, "isFolder", json_object_new_int(0));
 
-    rc = _tcloud_drive_batch_task("DELETE", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+    rc = _tcloud_drive_batch_task("DELETE", 0, json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
 
     json_object_put(root);
 
@@ -1901,7 +1703,7 @@ static void _tcloud_drive_fd_deallocate(struct tcloud_drive_fd *fd) {
 
 // type:
 // task: json string
-static int _tcloud_drive_batch_task(const char *type, const char *taskinfo) {
+static int _tcloud_drive_batch_task(const char *type, int64_t target_dir, const char *taskinfo) {
     struct json_object *root = NULL, *res_code = NULL, *task_id = NULL;
     struct tcloud_buffer b;
     struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
@@ -1912,6 +1714,11 @@ static int _tcloud_drive_batch_task(const char *type, const char *taskinfo) {
 
     req->method = TR_METHOD_POST;
     req->set_form(req, "type", type);
+    if (target_dir != 0) {
+        char tmp[128] = {0};
+        snprintf(tmp, sizeof(tmp), "%ld\n", target_dir);
+        req->set_form(req, "targetFolderId", tmp);
+    }
     req->set_form(req, "taskInfos", taskinfo);
 
     json_object_put(root);
@@ -1923,7 +1730,7 @@ static int _tcloud_drive_batch_task(const char *type, const char *taskinfo) {
         return ret;
     }
 
-    req->post(req, API_URL "/batch/createBatchTask.action", &b, NULL);
+    req->post(req, API_URL "/batch/createBatchTask.action", &b);
 
     _drive.request_pool->release(_drive.request_pool, req);
 

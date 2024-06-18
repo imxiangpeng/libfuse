@@ -34,7 +34,7 @@ int login(void) {
     req->set_header(req, "Referer", "https://cloud.189.cn");
     // req->allow_redirect(req, 0);
 
-    req->get(req, login_url, NULL /*&b*/, NULL);
+    req->get(req, login_url, NULL /*&b*/);
 
     printf("data:%s\n", b.data);
 
@@ -42,7 +42,6 @@ int login(void) {
 #endif
     printf("%s(%d): ....................\n", __FUNCTION__, __LINE__);
 
-    // req = tcloud_request_new(T_REQ_GET, listfiles_url);
     req = tcloud_request_new();
     req->set_query(req, "folderId", "-11");
     req->set_query(req, "pageSize", "100");
@@ -88,7 +87,7 @@ int login(void) {
     req->set_header(req, "Referer", "https://cloud.189.cn");
 
     tcloud_buffer_reset(&b);
-    req->request(req, listfiles_url, &b, NULL);
+    req->request(req, listfiles_url, &b);
 
     free(signature);
     printf("data:%s\n", b.data);
@@ -328,7 +327,7 @@ int web_initmulti() {
     free(encryption_text);
     
     tcloud_buffer_reset(&b);
-    req->get(req, initmultiupload, &b, NULL);
+    req->get(req, initmultiupload, &b);
 
     free(signature);
     printf("data:%s\n", b.data);

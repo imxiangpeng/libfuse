@@ -4,6 +4,7 @@
 #include <asm-generic/errno-base.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
 #define FUSE_USE_VERSION FUSE_VERSION
@@ -174,6 +175,33 @@ static bool is_valid_node(struct tcloudfs_node *node) {
     // printf("%s(%d): find:%p, valid node :%p == %d\n", __FUNCTION__, __LINE__, node, n, node == n);
 
     return node == n;
+}
+
+static struct tcloudfs_node *find_node(fuse_req_t req, ino_t ino) {
+    struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node = NULL;
+    if (ino == 1) {
+        node = hr_list_first_entry(&priv->head, struct tcloudfs_node, entry);
+    } else {
+        // we can directly use parent ino, because it's node pointer
+        // but we should verify it
+        // struct tcloudfs_node *p = NULL;
+        // hr_list_for_each_entry(p, &priv->head, entry) {
+        //
+        // }
+        node = (struct tcloudfs_node *)ino;
+    }
+
+    if (!node) {
+        return NULL;
+    }
+
+    if (!is_valid_node(node)) {
+        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+        return NULL;
+    }
+
+    return node;
 }
 
 static int tcloudfs_update_directory(struct tcloudfs_node *node) {
@@ -359,8 +387,8 @@ static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
 
 static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
                             const char *name) {
-    printf("%s(%d): .........priv:%p, parent ino:%" PRIu64 ", name:%s\n",
-           __FUNCTION__, __LINE__, fuse_req_userdata(req), parent, name);
+    HR_LOGD("%s(%d): .........priv:%p, parent ino:%" PRIu64 ", name:%s\n",
+            __FUNCTION__, __LINE__, fuse_req_userdata(req), parent, name);
 
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
@@ -398,7 +426,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.attr_timeout = 1.0;
     e.entry_timeout = 1.0;
     // only update directory when readdir for better performance
-    if (hr_list_empty(&node->childs)) {
+    if (node->expire_time == 0 || hr_list_empty(&node->childs)) {
         tcloudfs_update_directory(node);
     }
 
@@ -445,8 +473,8 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
 
 static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
-    printf("%s(%d): .........priv:%p, ino:%" PRIu64 ", nlookup:%" PRIu64 "\n", __FUNCTION__,
-           __LINE__, fuse_req_userdata(req), ino, nlookup);
+    HR_LOGD("%s(%d): .........priv:%p, ino:%" PRIu64 ", nlookup:%" PRIu64 "\n", __FUNCTION__,
+            __LINE__, fuse_req_userdata(req), ino, nlookup);
     if (ino == FUSE_ROOT_ID)
         return;
 
@@ -656,6 +684,10 @@ static void tcloudfs_opendir(fuse_req_t req, fuse_ino_t ino,
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
+
+    // force update
+    if (node->expire_time == 0)
+        tcloudfs_update_directory(node);
 
     HR_LOGD("%s(%d): open :%s\n", __FUNCTION__, __LINE__, node->name);
     fuse_reply_open(req, fi);
@@ -939,6 +971,7 @@ static void tcloudfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
         if (0 == strcmp(name, p->name)) {
             HR_LOGD("%s(%d): found node:%p\n", __FUNCTION__, __LINE__, p);
             tcloud_drive_unlink(p->cloud_id, name);
+            // maybe we should delete in forget
             deallocate_node(p);
             // expire immediately
             node->expire_time = 0;
@@ -949,6 +982,56 @@ static void tcloudfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
     fuse_reply_err(req, ENOENT);
 }
+
+static void tcloudfs_rename(fuse_req_t req, fuse_ino_t olddir, const char *oldname, fuse_ino_t newdir, const char *newname, unsigned int flags) {
+    printf("%s(%d): .........priv:%p, old:%" PRIu64 "new:%" PRIu64 ", name:%s -> %s\n", __FUNCTION__,
+           __LINE__, fuse_req_userdata(req), olddir, newdir, oldname, newname);
+
+    // struct tcloudfs_priv *priv = fuse_req_userdata(req);
+    struct tcloudfs_node *node_old_dir = NULL, *node_new_dir = NULL;
+    struct tcloudfs_node *node = NULL, *p = NULL;
+
+    node_old_dir = find_node(req, olddir);
+    node_new_dir = find_node(req, newdir);
+    if (!node_old_dir || !node_new_dir) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    // only support rename at current directory!
+    if (node_old_dir != node_new_dir) {
+        HR_LOGD("%s(%d): do not support rename crossing directory !\n");
+        fuse_reply_err(req, EPERM);
+        return;
+    }
+
+    if (hr_list_empty(&node_old_dir->childs)) {
+        tcloudfs_update_directory(node);
+    }
+
+    hr_list_for_each_entry(p, &node_old_dir->childs, entry) {
+        if (0 == strcmp(oldname, p->name)) {
+            HR_LOGD("%s(%d): found node:%p\n", __FUNCTION__, __LINE__, p);
+            tcloud_drive_rename(p->cloud_id, newname, S_ISDIR(p->mode) ? 1 : 0);
+
+            // only rename
+            // no need do anythings, because we do not move directory
+            free(p->name);
+            p->name = strdup(newname);
+            // we should not deallocate_node(p), because getattr will be called after rename
+            // delete will leading error!
+            // expire immediately
+            node_old_dir->expire_time = 0;
+            node_new_dir->expire_time = 0;
+
+            fuse_reply_err(req, 0);
+            return;
+        }
+    }
+
+    fuse_reply_err(req, ENONET);
+}
+
 static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
                             mode_t mode, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, parent:%" PRIu64 ", name:%s\n", __FUNCTION__,
@@ -1529,6 +1612,7 @@ static const struct fuse_lowlevel_ops tcloudfs_ops = {
     .mkdir = tcloudfs_mkdir,
     .rmdir = tcloudfs_rmdir,
     .unlink = tcloudfs_unlink,
+    .rename = tcloudfs_rename,
     .create = tcloudfs_create,
     .open = tcloudfs_open,
     .ioctl = tcloudfs_ioctl,

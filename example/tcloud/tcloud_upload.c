@@ -252,11 +252,11 @@ static void *write_routin(void *arg) {
                 pthread_cond_signal(&_queue.cond);
 
                 unsigned char *md5_digest = NULL;
-                unsigned int md5_digest_len = MD5_DIGEST_LENGTH;//EVP_MD_size(EVP_md5());
+                unsigned int md5_digest_len = MD5_DIGEST_LENGTH;  // EVP_MD_size(EVP_md5());
                 char *ptr = _upload_queue.md5sum;
                 int available = sizeof(_upload_queue.md5sum);
 
-                md5_digest = _upload_queue.md5_digest;// (unsigned char *)OPENSSL_malloc(md5_digest_len);
+                md5_digest = _upload_queue.md5_digest;  // (unsigned char *)OPENSSL_malloc(md5_digest_len);
                 EVP_DigestFinal_ex(_upload_queue.mdctx, md5_digest, &md5_digest_len);
                 EVP_MD_CTX_free(_upload_queue.mdctx);
                 _upload_queue.mdctx = NULL;
@@ -301,11 +301,11 @@ static void *write_routin(void *arg) {
     // update left data
     if (!hr_list_empty(&_upload_queue.head)) {
         unsigned char *md5_digest = NULL;
-        unsigned int md5_digest_len = MD5_DIGEST_LENGTH;//EVP_MD_size(EVP_md5());
+        unsigned int md5_digest_len = MD5_DIGEST_LENGTH;  // EVP_MD_size(EVP_md5());
         char *ptr = _upload_queue.md5sum;
         int available = sizeof(_upload_queue.md5sum);
 
-        md5_digest = _upload_queue.md5_digest;// (unsigned char *)OPENSSL_malloc(md5_digest_len);
+        md5_digest = _upload_queue.md5_digest;  // (unsigned char *)OPENSSL_malloc(md5_digest_len);
         EVP_DigestFinal_ex(_upload_queue.mdctx, md5_digest, &md5_digest_len);
         EVP_MD_CTX_free(_upload_queue.mdctx);
         _upload_queue.mdctx = NULL;
@@ -327,13 +327,12 @@ static void *write_routin(void *arg) {
         do_stream_upload(&_upload_queue);
         _upload_queue.part++;
         _queue.slice_size = _upload_queue.part;
-        
-        
-        while(!hr_list_empty(&_upload_queue.head)) {
+
+        while (!hr_list_empty(&_upload_queue.head)) {
             printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed ....................\n", __FUNCTION__, __LINE__);
-            
-        struct write_chunk *c = hr_list_first_entry(&_queue.head, struct write_chunk, entry);
-            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed .......:%p.............\n", __FUNCTION__, __LINE__, c) ;
+
+            struct write_chunk *c = hr_list_first_entry(&_queue.head, struct write_chunk, entry);
+            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed .......:%p.............\n", __FUNCTION__, __LINE__, c);
             hr_list_del(&c->entry);
             free(c);
         }
@@ -357,7 +356,7 @@ static void *write_routin(void *arg) {
         ptr += ret;
     }
     OPENSSL_free(md5_digest);
-    
+
     HR_LOGD("%s(%d): file total md5sum:%s\n", __FUNCTION__, __LINE__, _queue.md5sum);
 
     // generate slice_md5sum
@@ -370,9 +369,9 @@ static void *write_routin(void *arg) {
     } else {
         // must call init again
         EVP_DigestInit_ex(_queue.mdctx, EVP_md5(), NULL);
-        
+
         printf("%s(%d): data length:%ld  vs offset :%ld\n", __FUNCTION__, __LINE__, strlen(_queue.slice_md5sum_data.data), _queue.slice_md5sum_data.offset);
-        EVP_DigestUpdate(_queue.mdctx, _queue.slice_md5sum_data.data, _queue.slice_md5sum_data.offset );
+        EVP_DigestUpdate(_queue.mdctx, _queue.slice_md5sum_data.data, _queue.slice_md5sum_data.offset);
         md5_digest_len = EVP_MD_size(EVP_md5());
         ptr = _queue.slice_md5sum;
         available = sizeof(_queue.slice_md5sum);
@@ -392,7 +391,6 @@ static void *write_routin(void *arg) {
     }
     EVP_MD_CTX_free(_queue.mdctx);
     _queue.mdctx = NULL;
-
 
     HR_LOGD("%s(%d): final file total md5sum:%s, slice_md5sum:%s\n", __FUNCTION__, __LINE__, _queue.md5sum, _queue.slice_md5sum);
     do_commit_upload(&_queue);
@@ -560,7 +558,7 @@ int init_multi_upload(const char *name, size_t size, uint64_t parent_id, struct 
     _tcloud_drive_fill_final(req, action, &b);
 
     tcloud_buffer_reset(&b);
-    req->request(req, url, &b, NULL);
+    req->request(req, url, &b);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
 
@@ -629,7 +627,7 @@ int get_multi_upload_urls(const char *id, int part, const char *md5_base64, stru
     _tcloud_drive_fill_final(req, action, &b);
 
     tcloud_buffer_reset(&b);
-    req->request(req, url, &b, NULL);
+    req->request(req, url, &b);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
 
@@ -708,13 +706,13 @@ static int do_stream_upload(struct upload_queue *upload) {
     memset((void *)&res, 0, sizeof(res));
     HR_LOGD("%s(%d): upload id:%s, part:%d, md5sum:%s\n", __FUNCTION__, __LINE__, _queue.upload_id, upload->part, upload->md5sum);
     // char buf[128] = {0};
-    
-    char* md5_base64 = tcloud_utils_base64_encode((const char*)upload->md5_digest, sizeof(upload->md5_digest));
+
+    char *md5_base64 = tcloud_utils_base64_encode((const char *)upload->md5_digest, sizeof(upload->md5_digest));
 
     printf("md5 base64:%s\n", md5_base64);
-    
+
     get_multi_upload_urls(_queue.upload_id, upload->part + 1, md5_base64, &res);
-    
+
     free(md5_base64);
 
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
@@ -723,7 +721,7 @@ static int do_stream_upload(struct upload_queue *upload) {
     char *token = strtok_r(res.header, "&", &saveptr);
     while (token) {
         char *name = strtok_r(token, "=", &saveptr2);
-        char *value = saveptr2;//strtok_r(saveptr2, "=", &saveptr2);
+        char *value = saveptr2;  // strtok_r(saveptr2, "=", &saveptr2);
         printf("name:%s, val:%s\n", name, value);
 
         req->set_header(req, name, value);
@@ -735,7 +733,7 @@ static int do_stream_upload(struct upload_queue *upload) {
 
     // char *murl = "http://media-sdqd-fy-person.sdoss.ctyunxs.cn/PERSONCLOUD/ed44c77a-bd6b-4626-b24b-ba7a9b9f0a32.bin?partNumber=4&uploadId=2~X_FmL_9DbnyshsAAhiWB5y3pJ3-tXDH";
     // murl = "https://media-sdqd-fy-person.sdoss.ctyunxs.cn/PERSONCLOUD/f26e5dfd-839f-4f5a-b972-17119dbb153b.bin?partNumber\u003d1\u0026uploadId\u003d2~SXhXmQoL_mMVAlbmM6DYbQB7fOWU13F";
-    
+
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
     if (!strncmp(res.url, "https://", 8)) {
         size_t len = strlen(res.url);
@@ -750,19 +748,15 @@ static int do_stream_upload(struct upload_queue *upload) {
     req->set_header(req, "Expect", NULL);
 
     req->set_header(req, "Accept", "application/json;charset=UTF-8");
-    
-    
 
-    
     req->set_header(req, "User-Agent", _user_agent);
-
 
     req->set_query(req, "clientType", "TELEPC");
     req->set_query(req, "version", "6.2");
     req->set_query(req, "channelId", "web_cloud.189.cn");
     snprintf(tmp, sizeof(tmp), "%d_%d", rand(), rand());
     req->set_query(req, "rand", tmp);
-    
+
     req->put(req, res.url, &b, upload->content_length, _read_callback, upload);
 
     HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
@@ -776,7 +770,6 @@ static int do_stream_upload(struct upload_queue *upload) {
     }
     tcloud_request_free(req);
     tcloud_buffer_free(&b);
-    
 
     // getchar();
     return 0;
@@ -809,7 +802,7 @@ static int do_commit_upload(struct write_queue *queue) {
     _tcloud_drive_fill_final(req, action, &b);
 
     tcloud_buffer_reset(&b);
-    req->request(req, url, &b, NULL);
+    req->request(req, url, &b);
 
     printf("result:(%ld)%s\n", b.offset, b.data);
     // parse result:
@@ -817,7 +810,11 @@ static int do_commit_upload(struct write_queue *queue) {
 
     tcloud_request_free(req);
     tcloud_buffer_free(&b);
+
+    return 0;
 }
+
+#if 0
 int main(int argc, char **argv) {
     printf("argc:%d\n", argc);
     if (argc < 2) {
@@ -904,5 +901,52 @@ int main(int argc, char **argv) {
 
     tcloud_buffer_free(&_queue.slice_md5sum_data);
     getchar();
+    return 0;
+}
+#endif
+
+int main(int argc, char **argv) {
+    ssize_t rs = 0;
+    char buf[1024 * 128] = {0};
+    off_t off = 0;
+    struct stat sb;
+    int dst = -1;
+
+    if (argc < 3) return -1;
+
+    _fd = open(argv[1], O_RDONLY, 0755);
+    if (_fd < 0) {
+        printf("can not open:%s\n", argv[1]);
+        return -1;
+    }
+    
+    dst = open(argv[2], O_CREAT| O_RDWR|O_TRUNC, 0755);
+    if (dst < 0) {
+        printf("can not open:%s\n", argv[2]);
+        return -1;
+    }
+ 
+    if (fstat(_fd, &sb) != 0) {
+        close(_fd);
+        return -1;
+    }
+
+    ftruncate(dst, sb.st_size);
+    printf("press any char to copy ...\n");
+    getchar();
+    while ((rs = read(_fd, buf, sizeof(buf))) > 0) {
+        printf("read %ld bytes\n", rs);
+        // do_write(buf, off, rs);
+        write(dst, buf, rs);
+        off += rs;
+        // getchar();
+        //  usleep(500 * 1000);
+    }
+
+    close(dst);
+    printf("rs:%ld\n", rs);
+    close(_fd);
+    
+
     return 0;
 }
