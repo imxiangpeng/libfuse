@@ -7,11 +7,14 @@
 
 #include "j2sobject_cloud.h"
 
+#define TCLOUD_DRIVE_RESERVE_ID -0xEF00000000000001
+
 struct tcloud_drive_fd {
     int64_t id;  // cloud id
     int64_t parent;
 
     size_t size;  // total file size
+    // size_t truncate_size;  // total file size
     // upload ...
     int is_eof;  // stream is end ?
     int /*enum tcloud_drive_fd_type*/ type;

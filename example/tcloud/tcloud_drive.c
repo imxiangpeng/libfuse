@@ -67,7 +67,6 @@ const char *_user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 #define MD5_DIGEST_LENGTH 16
 #endif
 
-#define TCLOUD_DRIVE_RESERVE_ID -0xEF00000000000001
 // const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
 // const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
 
@@ -254,22 +253,21 @@ static int _tcloud_drive_fill_final(struct tcloud_request *req, const char *uri,
     if (params) {
         struct tcloud_buffer r;
         tcloud_buffer_alloc(&r, 512);
-        printf("raw params:%s\n", params->data);
+        // printf("raw params:%s\n", params->data);
         int rc = tcloud_utils_aes_ecb_data((unsigned char *)secret, params->data, params->offset, &r);
-        // int rc = tcloud_utils_rsa_encrypt(aes_public, params->data, params->offset, tmp, &rsa_len);
-        printf("aes enc result:%d, result:%ld\n", rc, r.offset);
+        // printf("aes enc result:%d, result:%ld\n", rc, r.offset);
 
         params_query = _hex_to_string(r.data, r.offset);
-        printf("encryption text:%s\n", params_query);
+        // printf("encryption text:%s\n", params_query);
         tcloud_buffer_free(&r);
         asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s&params=%s", session_key, req->method == TR_METHOD_GET ? "GET" : "POST", uri, date, params_query);
     } else {
         asprintf(&signature_data, "SessionKey=%s&Operate=%s&RequestURI=%s&Date=%s", session_key, req->method == TR_METHOD_GET ? "GET" : "POST", uri, date);
     }
 
-    HR_LOGD("%s(%d): signature data:%s\n", __FUNCTION__, __LINE__, signature_data);
+    // HR_LOGD("%s(%d): signature data:%s\n", __FUNCTION__, __LINE__, signature_data);
     char *signature = tcloud_utils_hmac_sha1(secret, (const unsigned char *)signature_data, strlen(signature_data));
-    HR_LOGD("%s(%d): signature:%s\n", __FUNCTION__, __LINE__, signature);
+    // HR_LOGD("%s(%d): signature:%s\n", __FUNCTION__, __LINE__, signature);
     req->set_header(req, "Signature", signature);
     free(signature_data);
     free(signature);
@@ -323,7 +321,6 @@ int tcloud_drive_storage_statfs(struct statvfs *st) {
 
     _drive.request_pool->release(_drive.request_pool, req);
 
-    printf("data:%s\n", b.data);
     root = json_tokener_parse(b.data);
     tcloud_buffer_free(&b);
     if (!root) {
@@ -338,7 +335,6 @@ int tcloud_drive_storage_statfs(struct statvfs *st) {
     }
     json_object_object_get_ex(root, "capacity", &capacity);
     json_object_object_get_ex(root, "available", &available);
-    printf("%s(%d): .capability:%ld, available:%ld...\n", __FUNCTION__, __LINE__, json_object_get_int64(capacity), json_object_get_int64(available));
     st->f_namemax = 255;
     st->f_bsize = 4096;
     st->f_blocks = json_object_get_int64(capacity) / st->f_bsize;
@@ -766,7 +762,9 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     if (offset != _fd->offset) {
         char range[64] = {0};
+        // do not end, so we may prefetch some data when sequence read ...
         snprintf(range, sizeof(range), "%zu-", offset);
+        // snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size);
         // must remove/add again for new request
         curl_multi_remove_handle(_fd->multi, _fd->curl);
         curl_easy_setopt(_fd->curl, CURLOPT_URL, _fd->url);
@@ -950,11 +948,11 @@ static int init_multi_upload(struct tcloud_drive_upload_fd *fd, struct response_
     data->id = strdup(json_object_get_string(json_upload_file_id));
     data->exists = json_object_get_int(json_file_data_exists);
 
-    HR_LOGD("%s(%d): .uploadType:%d, uploadHost:%s, uploadFileId:%s, fileDataExists:%d...\n", __FUNCTION__, __LINE__,
-            json_object_get_int(json_upload_type),
-            json_object_get_string(json_upload_host),
-            json_object_get_string(json_upload_file_id),
-            json_object_get_int(json_file_data_exists));
+    // HR_LOGD("%s(%d): .uploadType:%d, uploadHost:%s, uploadFileId:%s, fileDataExists:%d...\n", __FUNCTION__, __LINE__,
+    //        json_object_get_int(json_upload_type),
+    //        json_object_get_string(json_upload_host),
+    //        json_object_get_string(json_upload_file_id),
+    //        json_object_get_int(json_file_data_exists));
     json_object_put(root);
     return 0;
 }
@@ -982,7 +980,7 @@ static int get_multi_upload_urls(const char *id, int part, const char *md5_base6
     tcloud_buffer_reset(&b);
     req->request(req, url, &b);
 
-    printf("result:(%ld)%s\n", b.offset, b.data);
+    // printf("result:(%ld)%s\n", b.offset, b.data);
 
     _drive.request_pool->release(_drive.request_pool, req);
 
@@ -1095,14 +1093,14 @@ static int do_stream_upload(struct tcloud_drive_upload_fd *fd) {
         token = strtok_r(saveptr, "&", &saveptr);
     }
 
-    HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
+#if 0 // force none https for debug!
     if (!strncmp(res.url, "https://", 8)) {
         size_t len = strlen(res.url);
         memcpy(res.url + 4, res.url + 5, len - 5);
         res.url[len - 1] = '\0';
     }
+#endif
 
-    HR_LOGD("%s(%d): response url:%s, header:%s\n", __FUNCTION__, __LINE__, res.url, res.header);
     req->set_header(req, "Expect", NULL);
 
     req->set_header(req, "Accept", "application/json;charset=UTF-8");
@@ -1389,10 +1387,7 @@ static void *_tcloud_drive_upload_routin(void *arg) {
         // make sure all chunk have been freed!
         // normal it will be freed when have been readed!
         while (!hr_list_empty(&fd->upload_queue)) {
-            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed ....................\n", __FUNCTION__, __LINE__);
-
             ch = hr_list_first_entry(&fd->upload_queue, struct tcloud_drive_data_chunk, entry);
-            printf("%s(%d): @@@@@@@@@@@@@@@@@@@@@ not freed .......:%p.............\n", __FUNCTION__, __LINE__, ch);
             hr_list_del(&ch->entry);
             free(ch);
             ch = NULL;
