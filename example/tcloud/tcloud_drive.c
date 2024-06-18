@@ -476,9 +476,11 @@ int64_t tcloud_drive_mkdir(int64_t parent, const char *name) {
 
     asprintf(&url, API_URL
              "/createFolder.action"
-             "?parentFolderId=%ld"
-             "&folderName=%s",
-             parent, name);
+             "?parentFolderId=%ld",
+             parent);
+
+    // query will auto encode url
+    req->set_query(req, "folderName", name);
 
     if (!url) return -1;
 
