@@ -84,7 +84,8 @@ struct tcloudfs_priv {
 };
 
 static struct tcloudfs_priv _priv;
-int timespec_from_date_string(struct timespec *ts, const char *date) {
+
+static int timespec_from_date_string(struct timespec *ts, const char *date) {
     struct tm tm_time;
 
     if (!ts || !date) return -1;
@@ -358,8 +359,9 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
     }
     return ret;
 }
+
 static void tcloudfs_init(void *userdata, struct fuse_conn_info *conn) {
-    struct tcloudfs_priv *priv = (struct tcloudfs_data *)userdata;
+    struct tcloudfs_priv *priv = (struct tcloudfs_priv *)userdata;
 
     // tcloud_drive_init();
 
@@ -520,7 +522,8 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
 #endif
     fuse_reply_none(req);
 }
-void tcloudfs_forget_multi(fuse_req_t req, size_t count, struct fuse_forget_data *forgets) {
+
+static void tcloudfs_forget_multi(fuse_req_t req, size_t count, struct fuse_forget_data *forgets) {
     printf("%s(%d): .........priv:%p\n", __FUNCTION__, __LINE__, fuse_req_userdata(req));
     size_t i = 0;
 
@@ -555,8 +558,8 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
     }
 
     if (!is_valid_node(node)) {
-        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
         HR_LOGD("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+        fuse_reply_err(req, ENONET);
         return;
     }
 
@@ -1198,8 +1201,8 @@ static void tcloudfs_ioctl(fuse_req_t req, fuse_ino_t ino, unsigned int cmd,
 
     fuse_reply_err(req, 0);
 }
-void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
-                   struct fuse_file_info *fi) {
+
+static void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
@@ -1287,7 +1290,7 @@ void tcloudfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 #endif
 }
 
-void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
+static void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
                     size_t size, off_t off, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
            fuse_req_userdata(req), ino);
@@ -1357,9 +1360,7 @@ void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
         fuse_reply_err(req, -rc);
 }
 
-#if 1
-static int _write_fd = -1;
-static size_t _offset = 0;
+#if 0
 static void tcloudfs_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufvec *in_buf,
                                off_t off, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,
@@ -1407,19 +1408,6 @@ static void tcloudfs_write_buf(fuse_req_t req, fuse_ino_t ino, struct fuse_bufve
     else
         fuse_reply_write(req, (size_t)res);
 
-    if (_write_fd == -1) {
-        char path[256] = {0};
-        snprintf(path, sizeof(path), "/home/alex/workspace/workspace/libfuse/libfuse/build/dump.write.bin");
-        _write_fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0755);
-    }
-
-    if (_write_fd > 0) {
-        if (off != _offset) {
-            HR_LOGD("%s(%d): @@@@@@@@@@@@@@@@@@@@@@@@@ offset not matched! %ld vs %ld\n", __FUNCTION__, __LINE__, off, _offset);
-        }
-        write(_write_fd, out_buf.buf[0].mem, size);
-        _offset = off + size;
-    }
     free(out_buf.buf[0].mem);
 }
 #endif
@@ -1499,9 +1487,9 @@ static void tcloudfs_statfs(fuse_req_t req, fuse_ino_t ino) {
 
     fuse_reply_statfs(req, &priv->st.st);
 }
+
 static void tcloudfs_fallocate(fuse_req_t req, fuse_ino_t ino, int mode, off_t offset,
                                off_t length, struct fuse_file_info *fi) {
-    int err = EOPNOTSUPP;
     (void)ino;
 
     printf("%s(%d): .........priv:%p, ino:%" PRIu64 "\n", __FUNCTION__, __LINE__,

@@ -438,29 +438,20 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
              action,
              id, page_num, page_size);
 
-    printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     if (!url) return -1;
 
-    printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     tcloud_buffer_alloc(&b, 2048);
     req->method = TR_METHOD_GET;
-    printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
-    printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     int ret = _tcloud_drive_fill_final(req, action, NULL);
-    printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
     if (ret != 0) {
         _drive.request_pool->release(_drive.request_pool, req);
         tcloud_buffer_free(&b);
         return ret;
     }
 
-    printf("%s(%d): ..........\n", __FUNCTION__, __LINE__);
-
     ret = req->request(req, url, &b);
     _drive.request_pool->release(_drive.request_pool, req);
     free(url);
-    printf("%s(%d): ...ret:%d.......\n", __FUNCTION__, __LINE__, ret);
-    HR_LOGD("%s(%d): ....data:%s......\n", __FUNCTION__, __LINE__, b.data);
 
     if (ret != 0) {
         tcloud_buffer_free(&b);
@@ -559,29 +550,7 @@ int tcloud_drive_rmdir(int64_t id, const char *name) {
 
 int tcloud_drive_rename(int64_t id, const char *name, unsigned int flags) {
     printf("%s(%d): .....rename %ld -> %s with flags:0x%X ...\n", __FUNCTION__, __LINE__, id, name, flags);
-
-    int rc = 0;
-
     char tmp[128] = {0};
-#if 0
-    struct json_object *root = NULL, *task = NULL, *task_id = NULL;
-
-    root = json_object_new_array();
-    task = json_object_new_object();
-    json_object_array_add(root, task);
-
-    snprintf(tmp, sizeof(tmp), "%ld", id);
-    json_object_object_add(task, "fileId", json_object_new_string(tmp));
-    // no need
-    // char *escape_name = curl_easy_escape(NULL, name, 0);
-    // json_object_object_add(task, "fileName", json_object_new_string(escape_name));
-    // curl_free(escape_name);
-    json_object_object_add(task, "isFolder", json_object_new_int(0));
-
-    rc = _tcloud_drive_batch_task("DELETE", 0, json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
-
-    json_object_put(root);
-#endif
     char *url = NULL;
     struct tcloud_buffer b;
     struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
@@ -594,9 +563,11 @@ int tcloud_drive_rename(int64_t id, const char *name, unsigned int flags) {
     if (flags == 1) {
         action = "/renameFolder.action";
         req->set_query(req, "folderId", tmp);
+        // no need manual encode name, auto encoded when we request
         req->set_query(req, "destFolderName", name);
     } else {
         req->set_query(req, "fileId", tmp);
+        // no need manual encode name, auto encoded when we request
         req->set_query(req, "destFileName", name);
     }
 
@@ -635,17 +606,7 @@ int tcloud_drive_rename(int64_t id, const char *name, unsigned int flags) {
         printf(" can not parse json .....\n");
         return -1;
     }
-    return 0;
-}
-
-// static int tcloud_drive_truncate(const char *path, off_t size,
-//                                  struct fuse_file_info *fi) {
-//     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
-//     return 0;
-// }
-static int tcloud_drive_utimens(const char *path, const struct timespec tv[2],
-                                struct fuse_file_info *fi) {
-    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
+    json_object_put(root);
     return 0;
 }
 
@@ -661,7 +622,6 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
     struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
     printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     const char *action = "/getFileDownloadUrl.action";
-    char tmp[512] = {0};
     //    CURLU *url = curl_url();
     // curl_url_set(url, CURLUPART_URL, "https://api.cloud.189.cn/newOpen/oauth2/accessToken.action");
     // snprintf(tmp, sizeof(tmp))
@@ -718,7 +678,6 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
             curl_easy_setopt(fd->curl, CURLOPT_WRITEDATA, fd);
             // follow redirect
             curl_easy_setopt(fd->curl, CURLOPT_FOLLOWLOCATION, 1);
-            // curl_easy_setopt(fd->curl, CURLOPT_BUFFERSIZE, TCLOUD_DRIVE_READ_BUFFER_SIZE / 2);
         }
         printf("%s(%d): ..fd:%p..download url:%s....\n", __FUNCTION__, __LINE__, fd, json_object_get_string(download_url));
         json_object_put(root);
@@ -727,6 +686,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
 
     return TCLOUD_DRIVE_FD(fd);
 }
+
 int tcloud_drive_release(struct tcloud_drive_fd *fd) {
     printf("%s(%d): .....release :%p...\n", __FUNCTION__, __LINE__, fd);
     if (!fd) return -1;
@@ -914,7 +874,7 @@ struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent) {
     return TCLOUD_DRIVE_FD(fd);
 }
 
-int init_multi_upload(struct tcloud_drive_upload_fd *fd, struct response_init_multi_upload *data) {
+static int init_multi_upload(struct tcloud_drive_upload_fd *fd, struct response_init_multi_upload *data) {
     struct tcloud_buffer b;
     struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);  // tcloud_request_new();
 
@@ -999,7 +959,7 @@ int init_multi_upload(struct tcloud_drive_upload_fd *fd, struct response_init_mu
     return 0;
 }
 
-int get_multi_upload_urls(const char *id, int part, const char *md5_base64, struct response_multi_upload_urls *res) {
+static int get_multi_upload_urls(const char *id, int part, const char *md5_base64, struct response_multi_upload_urls *res) {
     struct tcloud_buffer b;
     struct tcloud_request *req = _drive.request_pool->acquire(_drive.request_pool);
 
@@ -1616,7 +1576,7 @@ int tcloud_drive_unlink(int64_t id, const char *name) {
 
     char tmp[128] = {0};
 
-    struct json_object *root = NULL, *task = NULL, *task_id = NULL;
+    struct json_object *root = NULL, *task = NULL;
 
     root = json_object_new_array();
     task = json_object_new_object();
