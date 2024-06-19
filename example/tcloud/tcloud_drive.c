@@ -608,6 +608,35 @@ int tcloud_drive_rename(int64_t id, const char *name, unsigned int flags) {
     return 0;
 }
 
+int tcloud_drive_move(int64_t id, const char *name, int64_t parent, unsigned int flags) {
+    printf("%s(%d): .....move %ld -> %s with flags:0x%X ...\n", __FUNCTION__, __LINE__, id, name, flags);
+    int rc = 0;
+    char tmp[128] = {0};
+    struct json_object *root = NULL, *task = NULL;
+
+    if (!name) return -1;
+
+    snprintf(tmp, sizeof(tmp), "%ld", id);
+
+    root = json_object_new_array();
+    task = json_object_new_object();
+    json_object_array_add(root, task);
+
+    snprintf(tmp, sizeof(tmp), "%ld", id);
+    json_object_object_add(task, "fileId", json_object_new_string(tmp));
+    // no need
+    char *escape_name = curl_easy_escape(NULL, name, 0);
+    json_object_object_add(task, "fileName", json_object_new_string(escape_name));
+    curl_free(escape_name);
+    json_object_object_add(task, "isFolder", json_object_new_int(flags == 1 ? 1 : 0));
+
+    rc = _tcloud_drive_batch_task("MOVE", parent, json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+
+    json_object_put(root);
+
+    return rc;
+}
+
 // return real download url
 struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
     struct tcloud_drive_download_fd *fd = NULL;
@@ -1095,7 +1124,7 @@ static int do_stream_upload(struct tcloud_drive_upload_fd *fd) {
         token = strtok_r(saveptr, "&", &saveptr);
     }
 
-#if 0 // force none https for debug!
+#if 0  // force none https for debug!
     if (!strncmp(res.url, "https://", 8)) {
         size_t len = strlen(res.url);
         memcpy(res.url + 4, res.url + 5, len - 5);
@@ -1153,6 +1182,8 @@ static int do_commit_upload(struct tcloud_drive_upload_fd *fd) {
     tcloud_buffer_append_string(&b, "&");
     snprintf(tmp, sizeof(tmp), "sliceMd5=%s", fd->slices_md5sum);
     tcloud_buffer_append_string(&b, tmp);
+    tcloud_buffer_append_string(&b, "&");
+    tcloud_buffer_append_string(&b, "opertype=3");  // force overwrite origin file
     tcloud_buffer_append_string(&b, "&");
     // always lazy check
     snprintf(tmp, sizeof(tmp), "lazyCheck=%d", 1 /*queue->slice_size == 1 ? 0 : 1*/);
@@ -1495,7 +1526,7 @@ int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t si
 
     if (self->type != TCLOUD_DRIVE_FD_UPLOAD) {
         HR_LOGD("%s(%d): error not upload fd ........\n", __FUNCTION__, __LINE__);
-        return -EIO;
+        return size;//-EIO; // drop without error
     }
     if (fd->tid == 0) {
         int ret = pthread_create(&fd->tid, NULL, _tcloud_drive_upload_routin, fd);
@@ -1558,6 +1589,7 @@ int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t si
 // maybe called when create, we must known size before upload ...
 // see: initMultiUpload
 int tcloud_drive_truncate(struct tcloud_drive_fd *self, size_t size) {
+    printf("%s(%d): ........\n", __FUNCTION__, __LINE__);
     // struct tcloud_drive_upload_fd * fd = NULL;
     if (!self) return -1;
     // fd = TCLOUD_DRIVE_UPLOAD_FD(self);
@@ -1671,9 +1703,11 @@ static int _tcloud_drive_batch_task(const char *type, int64_t target_dir, const 
 
     req->method = TR_METHOD_POST;
     req->set_form(req, "type", type);
+
+    // 0 -> 同步盘, we never use it
     if (target_dir != 0) {
         char tmp[128] = {0};
-        snprintf(tmp, sizeof(tmp), "%ld\n", target_dir);
+        snprintf(tmp, sizeof(tmp), "%ld", target_dir);
         req->set_form(req, "targetFolderId", tmp);
     }
     req->set_form(req, "taskInfos", taskinfo);

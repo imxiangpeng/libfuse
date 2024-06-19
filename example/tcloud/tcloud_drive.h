@@ -39,4 +39,5 @@ struct tcloud_drive_fd *tcloud_drive_create(const char *name, int64_t parent);
 int tcloud_drive_truncate(struct tcloud_drive_fd *self, size_t size);
 int tcloud_drive_unlink(int64_t id, const char* name);
 int tcloud_drive_rename(int64_t id, const char *name, unsigned int flags);
+int tcloud_drive_move(int64_t id, const char *name, int64_t dst_parent, unsigned int flags);
 #endif

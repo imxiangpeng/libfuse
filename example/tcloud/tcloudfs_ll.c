@@ -585,13 +585,17 @@ static void tcloudfs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
         printf("set gid:%d / gid:%d\n", attr->st_gid, attr->st_uid);
     }
     if (valid & FUSE_SET_ATTR_SIZE) {
-        HR_LOGD("%s(%d) set size ...:%ld, old:%ld\n", __FUNCTION__, __LINE__, attr->st_size, node->size);
+        struct tcloud_drive_fd *fd = (struct tcloud_drive_fd *)fi->fh;
+        HR_LOGD("%s(%d) set size %p...:%ld, old:%ld\n", __FUNCTION__, __LINE__, fi->fh, attr->st_size, node->size);
         node->truncate_size = attr->st_size;
+        if (fd) {
+            tcloud_drive_truncate(fd, node->truncate_size);
+        }
     }
 
     if (valid & FUSE_SET_ATTR_ATIME) {
         HR_LOGD("%s(%d): set %s atime\n", __FUNCTION__, __LINE__, node->name);
-        //node->atime = attr->st_atim;
+        // node->atime = attr->st_atim;
     }
 
     if (valid & FUSE_SET_ATTR_MTIME) {
@@ -886,12 +890,18 @@ static void tcloudfs_rename(fuse_req_t req, fuse_ino_t olddir, const char *oldna
         return;
     }
 
+#if 0
     // only support rename at current directory!
     if (node_old_dir != node_new_dir) {
-        HR_LOGD("%s(%d): do not support rename crossing directory !\n");
-        fuse_reply_err(req, EPERM);
+        // HR_LOGD("%s(%d): do not support rename crossing directory !\n", __FUNCTION__, __LINE__);
+        node_old_dir->expire_time = 0;
+        node_new_dir->expire_time = 0;
+
+        // fuse_reply_err(req, EPERM);
+        fuse_reply_err(req, 0);
         return;
     }
+#endif
 
     if (hr_list_empty(&node_old_dir->childs)) {
         tcloudfs_update_directory(node);
@@ -900,13 +910,18 @@ static void tcloudfs_rename(fuse_req_t req, fuse_ino_t olddir, const char *oldna
     hr_list_for_each_entry(p, &node_old_dir->childs, entry) {
         if (0 == strcmp(oldname, p->name)) {
             HR_LOGD("%s(%d): found node:%p\n", __FUNCTION__, __LINE__, p);
-            tcloud_drive_rename(p->cloud_id, newname, S_ISDIR(p->mode) ? 1 : 0);
-
-            // only rename
-            // no need do anythings, because we do not move directory
-            free(p->name);
-            p->name = strdup(newname);
-            // we should not deallocate_node(p), because getattr will be called after rename
+            if (node_old_dir == node_new_dir) {
+                tcloud_drive_rename(p->cloud_id, newname, S_ISDIR(p->mode) ? 1 : 0);
+                // only rename
+                // no need do anythings, because we do not move directory
+                free(p->name);
+                p->name = strdup(newname);
+                // we should not deallocate_node(p), because getattr will be called after rename
+            } else {
+                // only move, not rename
+                HR_LOGD("%s(%d): rename crossing directory, keep old name !\n", __FUNCTION__, __LINE__);
+                tcloud_drive_move(p->cloud_id, p->name, node_new_dir->cloud_id, S_ISDIR(p->mode) ? 1 : 0);
+            }
             // delete will leading error!
             // expire immediately
             node_old_dir->expire_time = 0;
@@ -978,19 +993,30 @@ static void tcloudfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 
     HR_LOGD("open node :%p -> %s,  vs fi->fh:%p\n", node, node->name, (void *)fi->fh);
     if (!node) {
-        fuse_reply_err(req, -ENOENT);
+        // not found, but this create operation
+        if (fi->flags & O_CREAT) {
+        }
+        fuse_reply_err(req, ENOENT);
         return;
     }
-    if (!is_valid_node(node)) {
-        fuse_reply_err(req, -ENOENT);
-        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+
+    HR_LOGD("%s(%d): open %s with create?:%d, with trunc:%d, all flags:%o\n", __FUNCTION__, __LINE__, node->name, fi->flags & O_CREAT, fi->flags & O_TRUNC, fi->flags);
+    if (!S_ISREG(node->mode)) {
+        fuse_reply_err(req, EPERM);
         return;
     }
 
     fi->direct_io = 1;
     fi->noflush = 1;
 
-    HR_LOGD("%s(%d): open %s with create?:%d, all flags:%o\n", __FUNCTION__, __LINE__, node->name, fi->flags & O_CREAT, fi->flags);
+    if (fi->flags & O_TRUNC) {
+        HR_LOGD("%s(%d): @@@@@@@@@@@@@@@@ using trunc write:%s @@@@@@@@@@@@@@@@@@@@@@@\n", __FUNCTION__, __LINE__, node->name);
+        node->size = 0;
+        node->truncate_size = 0;
+        fi->fh = (uint64_t)tcloud_drive_create(node->name, node->parent->cloud_id);
+        fuse_reply_open(req, fi);
+        return;
+    }
 
     fi->fh = (uint64_t)tcloud_drive_open(node->cloud_id);
     fuse_reply_open(req, fi);
