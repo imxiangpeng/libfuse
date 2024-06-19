@@ -33,7 +33,7 @@
 // default root directory is -11
 #define TCLOUDFS_DEFAULT_ROOT_ID -11
 
-#define TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME 1  // 60  // 5s
+#define TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME 60  // 60s
 
 #define TCLOUDFS_OPT(t, p, v) \
     { t, offsetof(struct tcloudfs_opt, p), v }
