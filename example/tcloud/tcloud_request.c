@@ -70,6 +70,8 @@ static struct tcloud_request *tcloud_request_pool_acquire(struct tcloud_request_
 
     pthread_mutex_unlock(&priv->lock);
 
+    HR_LOGD("%s(%d): got req:%p\n", __FUNCTION__, __LINE__, &req->request);
+
     return &req->request;
 }
 static void tcloud_request_pool_release(struct tcloud_request_pool *self, struct tcloud_request *req) {
@@ -78,10 +80,11 @@ static void tcloud_request_pool_release(struct tcloud_request_pool *self, struct
     if (!priv || !req) {
         return;
     }
+    HR_LOGD("%s(%d): release req:%p\n", __FUNCTION__, __LINE__, req);
     pthread_mutex_lock(&priv->lock);
     hr_list_add_tail(&TCLOUD_REQUEST_PRIV(req)->pool_entry, &priv->head);
-    pthread_mutex_unlock(&priv->lock);
     pthread_cond_signal(&priv->cond);
+    pthread_mutex_unlock(&priv->lock);
 }
 struct tcloud_request_pool *tcloud_request_pool_create(int max) {
     struct tcloud_request_pool_priv *priv = (struct tcloud_request_pool_priv *)calloc(1, sizeof(struct tcloud_request_pool_priv));
@@ -97,6 +100,7 @@ struct tcloud_request_pool *tcloud_request_pool_create(int max) {
 
     for (int i = 0; i < max; i++) {
         struct tcloud_request_priv *req = (struct tcloud_request_priv *)tcloud_request_new();
+    HR_LOGD("%s(%d): create req:%p\n", __FUNCTION__, __LINE__, req);
         hr_list_add_tail(&req->pool_entry, &priv->head);
     }
 
