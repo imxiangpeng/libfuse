@@ -388,6 +388,9 @@ struct tcloud_request *tcloud_request_new(void) {
         return NULL;
     }
 
+    // complete connection within 10000 milliseconds
+    curl_easy_setopt(priv->curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
+
     priv->request.method = TR_METHOD_GET;
 
     priv->request.set_query = _set_query;
