@@ -58,7 +58,7 @@ static struct tcloud_request *tcloud_request_pool_acquire(struct tcloud_request_
 
     pthread_mutex_lock(&priv->lock);
 
-    if (hr_list_empty(&priv->head)) {
+    while (hr_list_empty(&priv->head)) {
         // no available, wait available
         pthread_cond_wait(&priv->cond, &priv->lock);
     }
