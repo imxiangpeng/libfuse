@@ -437,8 +437,10 @@ int tcloud_drive_readdir(int64_t id, struct j2scloud_folder_resp *dir) {
              action,
              id, page_num, page_size);
 
-    if (!url) return -1;
-
+    if (!url) {
+        _drive.request_pool->release(_drive.request_pool, req);
+        return -1;
+    }
     tcloud_buffer_alloc(&b, 2048);
     req->method = TR_METHOD_GET;
     int ret = _tcloud_drive_fill_final(req, action, NULL);
@@ -725,6 +727,9 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
         struct json_object *download_url = NULL;
         if (json_object_object_get_ex(root, "fileDownloadUrl", &download_url)) {
             struct tcloud_drive_fd *self = _tcloud_drive_fd_allocate(TCLOUD_DRIVE_FD_DOWNLOAD);
+            
+            self->id = id;
+
             fd = TCLOUD_DRIVE_DOWNLOAD_FD(self);
             fd->url = strdup(json_object_get_string(download_url));
             pthread_mutex_init(&fd->mutex, NULL);
