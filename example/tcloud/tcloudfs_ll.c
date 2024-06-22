@@ -473,7 +473,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.entry_timeout = _priv.opts.entry_timeout;
 
     // only update directory when readdir for better performance
-    if (node->expire_time == 0 || hr_list_empty(&node->childs)) {
+    if (node->expire_time == 0 /*|| hr_list_empty(&node->childs)*/) {
         tcloudfs_update_directory(node);
     }
 
@@ -495,7 +495,6 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
             e.attr.st_size = S_ISDIR(p->mode) ? 4096 : p->size;
             e.attr.st_blksize = _priv.opts.blksize;
             e.attr.st_blocks = p->size / e.attr.st_blksize;
-
 
             e.attr.st_uid = _priv.opts.uid;
             e.attr.st_gid = _priv.opts.gid;
@@ -841,6 +840,11 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     }
 
     if (offset == 0 /*dh->data.offset == 0*/) {
+        // mxp, 20240622, create DELETE batchTask return and check finished
+        // but the file maybe also exists!
+        // it will return when we read, which leading some files maybe exists
+        // you can use wireshark capture stream to verify this!
+        // do not workaround!(you can disable expire_time=0 to workaround)
         node->expire_time = 0;  // force expire only for tests
         tcloudfs_update_directory(node);
         // cache timing ?
@@ -989,7 +993,7 @@ static void tcloudfs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     e.attr.st_ino = (fuse_ino_t)n;
     e.attr.st_mode = n->mode;
     e.attr.st_size = n->size;
-    e.attr.st_nlink = 2; // . & ..
+    e.attr.st_nlink = 2;  // . & ..
 
     e.attr.st_gid = _priv.opts.gid;
     e.attr.st_uid = _priv.opts.uid;
@@ -1014,7 +1018,7 @@ static void tcloudfs_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) 
     }
 
     if (hr_list_empty(&node->childs)) {
-        tcloudfs_update_directory(node);
+        // tcloudfs_update_directory(node);
     }
 
     hr_list_for_each_entry(p, &node->childs, entry) {
@@ -1060,7 +1064,7 @@ static void tcloudfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
     HR_LOGD("%s(%d): remove %s under %s\n", __FUNCTION__, __LINE__, name, node->name);
     if (hr_list_empty(&node->childs)) {
-        tcloudfs_update_directory(node);
+        // tcloudfs_update_directory(node);
     }
 
     hr_list_for_each_entry(p, &node->childs, entry) {
@@ -1180,12 +1184,14 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     n->mtime.tv_sec = time(NULL);
 
     e.ino = (fuse_ino_t)n;
+
+    e.attr.st_ino = e.ino;
     e.attr.st_mode = S_IFREG | mode | 755;
     e.attr.st_size = 0;
     e.attr.st_ctim.tv_sec = n->ctime.tv_sec;
     e.attr.st_atim.tv_sec = n->atime.tv_sec;
     e.attr.st_mtim.tv_sec = n->mtime.tv_sec;
-    e.attr.st_nlink = 1; // . & ..
+    e.attr.st_nlink = 1;  // . & ..
 
     e.attr.st_blksize = _priv.opts.blksize;
     e.attr.st_blocks = node->size / e.attr.st_blksize;
@@ -1196,8 +1202,8 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     e.generation = e.ino;
     // mxp, 20240607, use large timeout, fixed samba copy error!
     // using large timeout, which can reduce lookup callback
-    e.attr_timeout = 3.0f + _priv.opts.attr_timeout;
-    e.entry_timeout = 3.0f + _priv.opts.entry_timeout;
+    e.attr_timeout = 60.0f + _priv.opts.attr_timeout;
+    e.entry_timeout = 60.0f + _priv.opts.entry_timeout;
     fuse_reply_create(req, &e, fi);
 }
 static void tcloudfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
@@ -1407,7 +1413,7 @@ static void tcloudfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
     HR_LOGD("%s(%d): write file:%s, offset:%ld, real size:%ld .....\n", __FUNCTION__, __LINE__, node->name, off, size);
 
     if (rc >= 0) {
-        node->size += rc;
+        // node->size += rc;
         fuse_reply_write(req, size);
     } else {
         fuse_reply_err(req, -rc);

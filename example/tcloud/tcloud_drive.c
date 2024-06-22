@@ -61,7 +61,7 @@ const char *_user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 
 #define TCLOUD_DRIVE_READ_BUFFER_SIZE (2 * 1024 * 1024)
 
-#define TCLOUD_REQUEST_POOL_SIZE (2)
+#define TCLOUD_REQUEST_POOL_SIZE (5)
 
 #ifndef MD5_DIGEST_LENGTH
 #define MD5_DIGEST_LENGTH 16
@@ -555,6 +555,7 @@ int tcloud_drive_rmdir(int64_t id, const char *name) {
         usleep(1000 * 100);
         _tcloud_drive_wait_task("DELETE", tmp, &status);
         if (status == 2) {  // conflict
+    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
             return -status;
         }
         if (status == 4) {  // complete
@@ -563,6 +564,8 @@ int tcloud_drive_rmdir(int64_t id, const char *name) {
 
         i++;
     }
+    
+    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
     return rc;
 }
 
@@ -661,6 +664,7 @@ int tcloud_drive_move(int64_t id, const char *name, int64_t parent, unsigned int
         usleep(1000 * 100);
         _tcloud_drive_wait_task("MOVE", tmp, &status);
         if (status == 2) {  // conflict
+    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
             return -status;
         }
         if (status == 4) {  // complete
@@ -670,6 +674,7 @@ int tcloud_drive_move(int64_t id, const char *name, int64_t parent, unsigned int
         i++;
     }
 
+    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
     return rc;
 }
 
@@ -1242,7 +1247,7 @@ static int do_commit_upload(struct tcloud_drive_upload_fd *fd) {
     snprintf(tmp, sizeof(tmp), "lazyCheck=%d", 1 /*queue->slice_size == 1 ? 0 : 1*/);
     tcloud_buffer_append_string(&b, tmp);
 
-    HR_LOGD("%s(%d): .....deallocate:%p -> %s...\n", __FUNCTION__, __LINE__, fd, fd->name);
+    HR_LOGD("%s(%d): .....deallocate:%p -> %s...param:%s\n", __FUNCTION__, __LINE__, fd, fd->name, b.data);
     req->method = TR_METHOD_GET;
     _tcloud_drive_fill_final(req, action, &b);
 
@@ -1529,7 +1534,7 @@ static void *_tcloud_drive_upload_routin(void *arg) {
         ptr += ret;
     }
 
-    HR_LOGD("%s(%d): file total md5sum:%s\n", __FUNCTION__, __LINE__, fd->md5sum);
+    HR_LOGD("%s(%d): file total md5sum:%s, fd->slice_id:%d\n", __FUNCTION__, __LINE__, fd->md5sum, fd->slice_id);
 
     // multi parts ?
     // if (TCLOUD_DRIVE_FD(fd)->size / fd->split_slice_size > 1) {
@@ -1689,6 +1694,7 @@ int tcloud_drive_unlink(int64_t id, const char *name) {
         usleep(1000 * 100);
         _tcloud_drive_wait_task("DELETE", tmp, &status);
         if (status == 2) {  // conflict
+    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
             return -status;
         }
         if (status == 4) {  // complete
@@ -1698,6 +1704,7 @@ int tcloud_drive_unlink(int64_t id, const char *name) {
         i++;
     }
 
+    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
     HR_LOGD("%s(%d): ..maybe delete error......name:%s\n", __FUNCTION__, __LINE__, name);
     return rc;
 }
@@ -1766,6 +1773,8 @@ static int _tcloud_drive_batch_task(const char *type, int64_t target_dir, const 
         char tmp[128] = {0};
         snprintf(tmp, sizeof(tmp), "%ld", target_dir);
         req->set_form(req, "targetFolderId", tmp);
+    } else {
+        req->set_form(req, "targetFolderId", "");
     }
     req->set_form(req, "taskInfos", taskinfo);
 
