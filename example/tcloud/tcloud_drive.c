@@ -70,8 +70,8 @@ const char *_user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 // const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
 // const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
 
-const char *secret = "B5177A31F989CEEF90CF2B9783FC43B8";
-const char *session_key = "38be2f0c-1df6-4854-b3ec-e321aca785d4";
+const char *secret = "2605FEBA341CB21F23F57782A042F1B1";
+const char *session_key = "82cc88a6-5e43-494d-a50b-66abc579eaa2";
 
 struct tcloud_drive {
     struct tcloud_request_pool *request_pool;  // api request pool
