@@ -39,6 +39,9 @@
 #define TCLOUDFS_OPT(t, p, v) \
     { t, offsetof(struct tcloudfs_opt, p), v }
 
+// mark current node will be delete
+#define NODE_FLAGS_DELETE (1 << 0)
+
 struct tcloudfs_node {
     ino_t ino;  // --> id
     int64_t cloud_id;
@@ -49,11 +52,14 @@ struct tcloudfs_node {
     size_t truncate_size;
     mode_t mode;
 
+    int flags;
+
     int64_t generation;
     struct timespec atime;  // last access time
     struct timespec mtime;  // last modification
     struct timespec ctime;  // last status change time( create?)
     time_t expire_time;
+
     // struct tcloud_buffer *data;
     struct tcloudfs_node *hash_node;
     // struct j2sobject *dir;
@@ -145,6 +151,7 @@ static struct tcloudfs_node *allocate_node(uint64_t cloud_id, const char *name,
     node->cloud_id = cloud_id;
     node->name = strdup(name);
     node->parent = parent;
+    node->refcount = 1;
 
     node->generation = time(NULL);
 
@@ -167,8 +174,15 @@ static void deallocate_node(struct tcloudfs_node *node) {
     struct tcloudfs_node *p = NULL, *n = NULL;
     if (!node) return;
 
-    printf("%s(%d): deleallocate node:%p, %s\n", __FUNCTION__, __LINE__, node, node->name);
+    printf("%s(%d): deleallocate node:%p, %s, refcount:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
 
+    node->flags |= NODE_FLAGS_DELETE;
+    if (node->refcount > 1) {
+        printf("%s(%d): deleallocate node:%p, %s, refcount:%ld, only mark as delete later\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
+        return;
+    }
+
+    printf("%s(%d): real ... deleallocate node:%p, %s, refcount:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
     // 1. remove from hash table
     HASH_DEL(_priv.hash_node_lists, node);
 
@@ -244,6 +258,9 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
         return 0;
     }
 
+    // immediate update expire time, so other thread will not come in again
+    // we do not want use lock here
+    node->expire_time = now + TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME;
     HR_LOGD("%s(%d):  node:%s , id:%ld\n", __FUNCTION__, __LINE__, node->name, node->cloud_id);
     if (node->parent) {
         HR_LOGD("%s(%d):  node:%s/%s , id:%ld\n", __FUNCTION__, __LINE__, node->parent->name, node->name, node->cloud_id);
@@ -281,9 +298,10 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
     ret = tcloud_drive_readdir(node->cloud_id, dir);
     if (ret != 0) {
         HR_LOGD("%s(%d):  failed read node:%s (%ld)\n", __FUNCTION__, __LINE__, node->name, node->cloud_id);
-        j2sobject_free(J2SOBJECT(dir));
+        // j2sobject_free(J2SOBJECT(dir));
 
-        return -1;
+        goto out;
+        // return -1;
     }
 
     struct j2scloud_folder_resp *object = dir;
@@ -293,7 +311,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
         for (d = (j2scloud_folder_t *)J2SOBJECT(object->folderList)->next;
              d != (j2scloud_folder_t *)J2SOBJECT(object->folderList);
              d = (j2scloud_folder_t *)J2SOBJECT(d)->next) {
-            printf("%s(%d): dir name: %s, id:%ld\n", __FUNCTION__, __LINE__, d->name, (uint64_t)d->id);
+            HR_LOGD("%s(%d): dir name: %s, id:%ld\n", __FUNCTION__, __LINE__, d->name, (uint64_t)d->id);
             int use_cache = 0;
 
             hr_list_for_each_entry_safe(p, n, &remove_queue, entry) {
@@ -382,6 +400,7 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
         }
     }
 
+out:
 #if 0
     hr_list_for_each_entry_safe(p, n, &node->childs, entry) {
         printf("now nodes: %p -> %ld -> %s, dir:%d\n", p, p->cloud_id, p->name, S_ISDIR(p->mode));
@@ -478,9 +497,12 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     //}
 
     hr_list_for_each_entry(p, &node->childs, entry) {
-        printf("%s(%d): node:%p,  child: id:%ld, name:%s( vs %s), dir:%d\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, name, S_ISDIR(p->mode));
+        if (p->flags & NODE_FLAGS_DELETE) {
+            continue;
+        }
+        printf("%s(%d): node:%p,  child: id:%ld, name:%s( vs %s), dir:%d, flags:0x%X\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, name, S_ISDIR(p->mode), p->flags);
         if (0 == strcmp(name, p->name)) {
-            printf("got :%s\n", name);
+            printf("got :%s, refcount:%ld\n", name, p->refcount);
             e.attr.st_mode = p->mode /* | TCLOUDFS_DEFAULT_MODE*/;
             e.attr.st_ino = (fuse_ino_t)p;
             e.attr.st_nlink = S_ISDIR(p->mode) ? 2 : 1;
@@ -503,6 +525,7 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
             e.ino = (fuse_ino_t)p;
             e.generation = p->generation;
 
+            p->refcount++;  // lookup++ when fuse_reply_entry
             fuse_reply_entry(req, &e);
             return;
         }
@@ -512,6 +535,13 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     fuse_reply_err(req, ENOENT);
 }
 
+static void tcloudfs_do_forget(struct tcloudfs_node *node, uint64_t nlookup) {
+    if (!node) return;
+    HR_LOGD("%s(%d): forge %p, %s, refcount:%ld, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount, nlookup);
+    node->refcount -= nlookup;
+    HR_LOGD("%s(%d): forge %p, %s, after forget refcount:%ld, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount, nlookup);
+    deallocate_node(node);
+}
 static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
     HR_LOGD("%s(%d): .........priv:%p, ino:%" PRIu64 ", nlookup:%" PRIu64 "\n", __FUNCTION__,
@@ -523,19 +553,10 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
 
     // do_forget(req_fuse(req), ino, nlookup);
     struct tcloudfs_node *node = NULL, *p = NULL;
-    node = (struct tcloudfs_node *)ino;
-    if (!is_valid_node(node)) {
-        fuse_reply_none(req);
-        printf("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
-        return;
-    }
+    node = (struct tcloudfs_node *)find_node(req, ino);
+    HR_LOGD("%s(%d): forge %p, %s, refcount:%ld, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount, nlookup);
 
-    if (!is_valid_node(node)) {
-        fuse_reply_none(req);
-        return;
-    }
-
-    HR_LOGD("%s(%d): forge %p, %s, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, nlookup);
+    tcloudfs_do_forget(node, nlookup);
 #if 0
     printf("id: %d, name:%s, is dir:%d\n", node->cloud_id, node->name, S_ISDIR(node->mode));
     if (S_ISDIR(node->mode)) {
@@ -570,9 +591,12 @@ static void tcloudfs_forget_multi(fuse_req_t req, size_t count, struct fuse_forg
     printf("%s(%d): .........priv:%p\n", __FUNCTION__, __LINE__, fuse_req_userdata(req));
     size_t i = 0;
 
+    struct tcloudfs_node *node = NULL;
     // forgets is not null
     for (i = 0; i < count; i++) {
         HR_LOGD("%s(%d): i:%d -> ino:%ld -> nlookup:%ld\n", __FUNCTION__, __LINE__, i, forgets[i].ino, forgets[i].nlookup);
+        node = (struct tcloudfs_node *)find_node(req, forgets[i].ino);
+        tcloudfs_do_forget(node, forgets[i].nlookup);
     }
 
     fuse_reply_none(req);
@@ -588,6 +612,12 @@ static void tcloudfs_getattr(fuse_req_t req, fuse_ino_t ino,
 
     if (!node) {
         HR_LOGD("%s(%d): not invalid node:%p\n", __FUNCTION__, __LINE__, node);
+        fuse_reply_err(req, ENONET);
+        return;
+    }
+
+    if (node->flags & NODE_FLAGS_DELETE) {
+        HR_LOGD("%s(%d):  node:%p -> %s, has been marked as delete\n", __FUNCTION__, __LINE__, node, node->name);
         fuse_reply_err(req, ENONET);
         return;
     }
@@ -813,6 +843,9 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         dh->data.offset += entlen;
 
         hr_list_for_each_entry(p, &node->childs, entry) {
+            if (p->flags & NODE_FLAGS_DELETE) {
+                continue;
+            }
             HR_LOGD("%s(%d): read dir fill entry %p -> %ld -> %s, dir:%d, mode type:%o\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, S_ISDIR(p->mode), p->mode & S_IFMT);
             st.st_mode = p->mode;  // & S_IFMT /*S_IFDIR*/;
             st.st_ino = (fuse_ino_t)p;
@@ -942,6 +975,8 @@ static void tcloudfs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     // using large timeout, which can reduce lookup callback
     e.attr_timeout = 3.0 + _priv.opts.attr_timeout;
     e.entry_timeout = 3.0 + _priv.opts.entry_timeout;
+
+    n->refcount++;
     fuse_reply_entry(req, &e);
 }
 
@@ -968,6 +1003,7 @@ static void tcloudfs_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) 
                 return;
             }
 
+            HR_LOGD("%s(%d): rmdir node:%p -> %s\n", __FUNCTION__, __LINE__, p, p->name);
             tcloud_drive_rmdir(p->cloud_id, name);
             deallocate_node(p);
 
@@ -1147,6 +1183,8 @@ static void tcloudfs_create(fuse_req_t req, fuse_ino_t parent, const char *name,
     // using large timeout, which can reduce lookup callback
     e.attr_timeout = 60.0f + _priv.opts.attr_timeout;
     e.entry_timeout = 60.0f + _priv.opts.entry_timeout;
+
+    n->refcount++;
     fuse_reply_create(req, &e, fi);
 }
 static void tcloudfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
