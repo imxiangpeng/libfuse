@@ -1,16 +1,11 @@
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
-#include <asm-generic/errno-base.h>
-#include <asm-generic/errno.h>
-#include <stdint.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/xattr.h>
 #endif
 
 #define FUSE_USE_VERSION FUSE_VERSION
 
+#include <dirent.h>
 #include <errno.h>
 #include <fuse_kernel.h>
 #include <fuse_lowlevel.h>
@@ -18,11 +13,16 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/xattr.h>
 
 #include "hr_list.h"
 #include "hr_log.h"
@@ -395,9 +395,9 @@ static int tcloudfs_update_directory(struct tcloudfs_node *node) {
     printf("%s(%d): .....................\n", __FUNCTION__, __LINE__);
 #endif
     // cache only when folder or file is empty
-    if (dir->folderList || dir->fileList) {
-        node->expire_time = now + TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME;
-    }
+    // if (dir->folderList || dir->fileList) {
+    node->expire_time = now + TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME;
+    //}
 
     j2sobject_free(J2SOBJECT(dir));
     hr_list_for_each_entry_safe(p, n, &remove_queue, entry) {
@@ -473,9 +473,9 @@ static void tcloudfs_lookup(fuse_req_t req, fuse_ino_t parent,
     e.entry_timeout = _priv.opts.entry_timeout;
 
     // only update directory when readdir for better performance
-    if (node->expire_time == 0 /*|| hr_list_empty(&node->childs)*/) {
-        tcloudfs_update_directory(node);
-    }
+    // if (node->expire_time == 0 /*|| hr_list_empty(&node->childs)*/) {
+    tcloudfs_update_directory(node);
+    //}
 
     hr_list_for_each_entry(p, &node->childs, entry) {
         printf("%s(%d): node:%p,  child: id:%ld, name:%s( vs %s), dir:%d\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, name, S_ISDIR(p->mode));
@@ -735,11 +735,16 @@ static void tcloudfs_opendir(fuse_req_t req, fuse_ino_t ino,
 
     fi->fh = (uintptr_t)dh;
 
+    HR_LOGD("%s(%d):  directory handle :%p\n", __FUNCTION__, __LINE__, fi->fh);
+
+    fi->keep_cache = 1;
+    fi->cache_readdir = 1;
+    fi->noflush = 1;
+
     HR_LOGD("%s(%d): open :%s\n", __FUNCTION__, __LINE__, node->name);
     fuse_reply_open(req, fi);
 }
 
-#include <dirent.h>
 static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
                              off_t offset, struct fuse_file_info *fi) {
     printf("%s(%d): .........priv:%p, ino:%" PRIu64
@@ -763,73 +768,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     // node->expire_time = 0; // force expire only for tests
     // tcloudfs_update_directory(node);
 
-#if 0
-    if (!node->data) {
-        node->data =
-            (struct tcloud_buffer *)calloc(1, sizeof(struct tcloud_buffer));
-        tcloud_buffer_alloc(node->data, 512);
-
-        // cache timing ?
-        now = time(NULL);
-
-        printf("%s(%d): .........priv:%p, ino:%" PRIu64
-               ", size:%ld, offset:%ld, fi:%p, time :%ld, expire:%ld\n",
-               __FUNCTION__, __LINE__, fuse_req_userdata(req), ino, size, offset, fi, now, node->expire_time);
-        // using cache
-        struct tcloudfs_node *p = NULL;
-
-        // printf("%s(%d).....using cache.....\n", __FUNCTION__, __LINE__)
-        struct stat st;
-        memset((void *)&st, 0, sizeof(st));
-        // st.st_mode = S_IFDIR;
-
-        size_t entlen = fuse_add_direntry(req, NULL, 0, ".", NULL, 0);
-        entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
-                                   (node->data->size - node->data->offset), ".",
-                                   &st, node->data->offset + entlen);
-        node->data->offset += entlen;
-        entlen = fuse_add_direntry(req, NULL, 0, "..", NULL, 0);
-        entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
-                                   (node->data->size - node->data->offset), "..",
-                                   &st, node->data->offset + entlen);
-        node->data->offset += entlen;
-
-        hr_list_for_each_entry(p, &node->childs, entry) {
-            HR_LOGD("%s(%d): read dir fill entry %p -> %ld -> %s, dir:%d, mode type:%o\n", __FUNCTION__, __LINE__, p, p->cloud_id, p->name, S_ISDIR(p->mode), p->mode & S_IFMT);
-            st.st_mode = p->mode & S_IFMT /*S_IFDIR*/;
-            st.st_ino = (fuse_ino_t)p;
-            entlen = fuse_add_direntry(req, NULL, 0, p->name, NULL, 0);
-            if (node->data->offset + entlen > node->data->size) {
-                tcloud_buffer_realloc(node->data, node->data->size + entlen + 256);
-            }
-            entlen = fuse_add_direntry(req, node->data->data + node->data->offset,
-                                       (node->data->size - node->data->offset),
-                                       p->name, &st, node->data->offset + entlen);
-            node->data->offset += entlen;
-        }
-    }
-    
-    dh = (struct tcloudfs_dh*)fi->fh;
-
-    if (!dh) {
-        HR_LOGD("%s(%d): error .......................!\n", __FUNCTION__, __LINE__);
-
-        fuse_reply_err(req, ENOMEM);
-       return; 
-    }
-    
-    if (dh->data.offset == 0) {
-        HR_LOGD("%s(%d): init for read dir...:%s....................!\n", __FUNCTION__, __LINE__, node->name);
-        // we should init data
-        if (node->data->offset > dh->data.size) {
-            tcloud_buffer_realloc(&dh->data, node->data->offset);
-        }
-        tcloud_buffer_reset(&dh->data);
-        dh->offset = 0;
-        tcloud_buffer_append(&dh->data, node->data->data, node->data->offset);
-    }
-#else
-
+    HR_LOGD("%s(%d):  directory handle :%p\n", __FUNCTION__, __LINE__, fi->fh);
     dh = (struct tcloudfs_dh *)fi->fh;
 
     if (!dh) {
@@ -845,7 +784,7 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         // it will return when we read, which leading some files maybe exists
         // you can use wireshark capture stream to verify this!
         // do not workaround!(you can disable expire_time=0 to workaround)
-        node->expire_time = 0;  // force expire only for tests
+        // node->expire_time = 0;  // force expire only for tests
         tcloudfs_update_directory(node);
         // cache timing ?
         now = time(NULL);
@@ -887,8 +826,6 @@ static void tcloudfs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
             dh->data.offset += entlen;
         }
     }
-
-#endif
 
     size_t total = dh->data.offset;
     printf("%s(%d): total:%ld, offset:%ld, size:%ld..........\n", __FUNCTION__,
@@ -938,6 +875,7 @@ static void tcloudfs_releasedir(fuse_req_t req, fuse_ino_t ino,
         HR_LOGD("%s(%d): closedir :%s/%s (%p), id:%ld\n", __FUNCTION__, __LINE__, node->parent->name, node->name, node, node->cloud_id);
     }
 
+    HR_LOGD("%s(%d):  directory handle :%p\n", __FUNCTION__, __LINE__, fi->fh);
     dh = (struct tcloudfs_dh *)fi->fh;
 
     if (!dh) {
@@ -1033,6 +971,8 @@ static void tcloudfs_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) 
             tcloud_drive_rmdir(p->cloud_id, name);
             deallocate_node(p);
 
+            // force update date, so we can not read from server(because server maybe return files which have been deleted)
+            node->expire_time = time(NULL) + TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME;
             // parent expire immediately
             // node->expire_time = 0;
 #if 0
@@ -1076,6 +1016,9 @@ static void tcloudfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
             // expire immediately
             // node->expire_time = 0;
             // do not expire immediately, because server maybe slow ...
+
+            // force update date, so we can not read from server(because server maybe return files which have been deleted)
+            node->expire_time = time(NULL) + TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME;
 #if 0
             if (node->data) {
                 tcloud_buffer_free(node->data);

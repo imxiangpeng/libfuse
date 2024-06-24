@@ -70,8 +70,8 @@ const char *_user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 // const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
 // const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
 
-const char *secret = "2605FEBA341CB21F23F57782A042F1B1";
-const char *session_key = "82cc88a6-5e43-494d-a50b-66abc579eaa2";
+const char *secret = "C337269FA8883E42BD6E5B8AA951A98D";
+const char *session_key = "fef41a2d-875a-4a4d-aaca-73fe22c28223";
 
 struct tcloud_drive {
     struct tcloud_request_pool *request_pool;  // api request pool
@@ -1611,10 +1611,11 @@ int tcloud_drive_write(struct tcloud_drive_fd *self, const char *data, size_t si
     memcpy(ch->payload, data, size);
 
     if (fd->error_code != 0) {
+        free(ch);
         return -1;
     }
     pthread_mutex_lock(&fd->mutex);
-    if (fd->pending_length > TCLOUD_DRIVE_UPLOAD_PENDING_MAX) {
+    while (fd->pending_length > TCLOUD_DRIVE_UPLOAD_PENDING_MAX) {
         HR_LOGD("%s(%d): reach max pending queue ........\n", __FUNCTION__, __LINE__);
 #if 0
         struct timespec ts;
