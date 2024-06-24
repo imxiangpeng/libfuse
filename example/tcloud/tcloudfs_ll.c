@@ -176,11 +176,13 @@ static void deallocate_node(struct tcloudfs_node *node) {
 
     printf("%s(%d): deleallocate node:%p, %s, refcount:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
 
+#if 0
     node->flags |= NODE_FLAGS_DELETE;
     if (node->refcount > 1) {
         printf("%s(%d): deleallocate node:%p, %s, refcount:%ld, only mark as delete later\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
         return;
     }
+#endif
 
     printf("%s(%d): real ... deleallocate node:%p, %s, refcount:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
     // 1. remove from hash table
@@ -195,16 +197,23 @@ static void deallocate_node(struct tcloudfs_node *node) {
     node->parent = NULL;
     free(node->name);
     hr_list_del(&node->entry);
-#if 0
-    if (node->data) {
-        tcloud_buffer_free(node->data);
-        free(node->data);
-        node->data = NULL;
-    }
-#endif
 
     // 4. free self memory
     free(node);
+}
+
+// do not realy deallocate the node
+// it will be deallocate when we receive forget
+static void unref_node(struct tcloudfs_node *node) {
+    if (!node) return;
+
+    printf("%s(%d): deleallocate node:%p, %s, refcount:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount);
+
+    node->flags |= NODE_FLAGS_DELETE;
+    node->refcount--;
+    if (node->refcount <= 0) {
+        deallocate_node(node);
+    }
 }
 
 static bool is_valid_node(struct tcloudfs_node *node) {
@@ -540,7 +549,18 @@ static void tcloudfs_do_forget(struct tcloudfs_node *node, uint64_t nlookup) {
     HR_LOGD("%s(%d): forge %p, %s, refcount:%ld, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount, nlookup);
     node->refcount -= nlookup;
     HR_LOGD("%s(%d): forge %p, %s, after forget refcount:%ld, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount, nlookup);
-    deallocate_node(node);
+
+    // timeout no needed causing forget
+    if (node->refcount == 1) {
+        node->parent->expire_time = 0;  // notify parent folder reload
+        // we can deallocate, but we should notify parent reload
+        deallocate_node(node);
+        return;
+    }
+    // unlink/rmdir causing forget
+    if (node->refcount == 0) {
+        deallocate_node(node);
+    }
 }
 static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     struct tcloudfs_priv *priv = fuse_req_userdata(req);
@@ -1005,7 +1025,8 @@ static void tcloudfs_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) 
 
             HR_LOGD("%s(%d): rmdir node:%p -> %s\n", __FUNCTION__, __LINE__, p, p->name);
             tcloud_drive_rmdir(p->cloud_id, name);
-            deallocate_node(p);
+            // deallocate_node(p);
+            unref_node(p);  // wait forget & delete
 
             // force update date, so we can not read from server(because server maybe return files which have been deleted)
             node->expire_time = time(NULL) + TCLOUDFS_NODE_DEFAULT_EXPIRE_TIME;
@@ -1048,7 +1069,8 @@ static void tcloudfs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
             HR_LOGD("%s(%d): remove %s under %s\n", __FUNCTION__, __LINE__, name, node->name);
             tcloud_drive_unlink(p->cloud_id, name);
             // maybe we should delete in forget
-            deallocate_node(p);
+            // deallocate_node(p);
+            unref_node(p);  // wait forget & delete
             // expire immediately
             // node->expire_time = 0;
             // do not expire immediately, because server maybe slow ...
@@ -1207,7 +1229,7 @@ static void tcloudfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
         return;
     }
 
-    fi->direct_io = 1;
+    fi->direct_io = 1;  // must use direct_io
     fi->noflush = 1;
 
     if (fi->flags & O_TRUNC) {
@@ -1253,11 +1275,12 @@ static void tcloudfs_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
         // }
     }
 
-#if 0  // delete when upload failed, trigger double free
+#if 1  // delete when upload failed, trigger double free
     if (id == TCLOUD_DRIVE_RESERVE_ID) {
         // upload failed, mxp , tests
         HR_LOGD("%s(%d): release %s, -> :%ld upload failed delete auto .....\n", __FUNCTION__, __LINE__, node->name, node->cloud_id);
-        deallocate_node(node);
+        // deallocate_node(node);
+        unref_node(node);  // wait forget & delete
     }
 #endif
     fuse_reply_err(req, 0);

@@ -555,7 +555,7 @@ int tcloud_drive_rmdir(int64_t id, const char *name) {
         usleep(1000 * 100);
         _tcloud_drive_wait_task("DELETE", tmp, &status);
         if (status == 2) {  // conflict
-    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
+            HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
             return -status;
         }
         if (status == 4) {  // complete
@@ -564,7 +564,7 @@ int tcloud_drive_rmdir(int64_t id, const char *name) {
 
         i++;
     }
-    
+
     HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
     return rc;
 }
@@ -664,7 +664,7 @@ int tcloud_drive_move(int64_t id, const char *name, int64_t parent, unsigned int
         usleep(1000 * 100);
         _tcloud_drive_wait_task("MOVE", tmp, &status);
         if (status == 2) {  // conflict
-    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
+            HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
             return -status;
         }
         if (status == 4) {  // complete
@@ -732,7 +732,7 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
         struct json_object *download_url = NULL;
         if (json_object_object_get_ex(root, "fileDownloadUrl", &download_url)) {
             struct tcloud_drive_fd *self = _tcloud_drive_fd_allocate(TCLOUD_DRIVE_FD_DOWNLOAD);
-            
+
             self->id = id;
 
             fd = TCLOUD_DRIVE_DOWNLOAD_FD(self);
@@ -744,11 +744,22 @@ struct tcloud_drive_fd *tcloud_drive_open(int64_t id) {
             tcloud_buffer_alloc(&fd->cache, TCLOUD_DRIVE_READ_BUFFER_SIZE);
 
             curl_multi_add_handle(fd->multi, fd->curl);
+
+#if 1  // force none https for debug!
+            if (!strncmp(fd->url, "https://", 8)) {
+                size_t len = strlen(fd->url);
+                memcpy(fd->url + 4, fd->url + 5, len - 5);
+                fd->url[len - 1] = '\0';
+            }
+#endif
+
             curl_easy_setopt(fd->curl, CURLOPT_URL, fd->url);
             curl_easy_setopt(fd->curl, CURLOPT_WRITEFUNCTION, _tcloud_drive_download_receive);
             curl_easy_setopt(fd->curl, CURLOPT_WRITEDATA, fd);
             // follow redirect
             curl_easy_setopt(fd->curl, CURLOPT_FOLLOWLOCATION, 1);
+
+            // curl_easy_setopt(fd->curl, CURLOPT_TCP_FASTOPEN, 1L); // Enable TCP Fast Open
         }
         printf("%s(%d): ..fd:%p..download url:%s....\n", __FUNCTION__, __LINE__, fd, json_object_get_string(download_url));
         json_object_put(root);
@@ -789,7 +800,7 @@ int tcloud_drive_release(struct tcloud_drive_fd *fd, int64_t *id) {
             pthread_join(_fd->tid, NULL);
             _fd->tid = 0;
         }
-        
+
         if (id) {
             *id = fd->id;
         }
@@ -829,6 +840,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     HR_LOGD("%s(%d): ......fd:%p. offset:%ld, size:%ld.\n", __FUNCTION__, __LINE__, fd, offset, size);
 
     _fd = TCLOUD_DRIVE_DOWNLOAD_FD(fd);
+
     // offset is not in cached
     if (offset != _fd->offset) {
         HR_LOGD("%s(%d): warning !!! random read !!! maybe pool performance .....fd:%p. offset:%ld, size:%ld. current buf offset:%ld, cache size:%u\n", __FUNCTION__, __LINE__, fd, offset, size, _fd->offset, _fd->cache.offset);
@@ -849,7 +861,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
         char range[64] = {0};
         // do not end, so we may prefetch some data when sequence read ...
         snprintf(range, sizeof(range), "%zu-", offset);
-        // snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size);
+        // snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
         // must remove/add again for new request
         curl_multi_remove_handle(_fd->multi, _fd->curl);
         curl_easy_setopt(_fd->curl, CURLOPT_URL, _fd->url);
@@ -872,7 +884,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     do {
         int numfds = 0;
         int msgq = 0;
-        CURLMcode mc = curl_multi_wait(_fd->multi, NULL, 0, 1000, &numfds);
+        CURLMcode mc = curl_multi_wait(_fd->multi, NULL, 0, 500, &numfds);
         if (mc) {
             HR_LOGE("curl_multi_wait failed, code %d.\n", (int)mc);
             break;
@@ -902,6 +914,34 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     } while (still_running);
 
+    long http_code = 0;
+    curl_easy_getinfo(_fd->curl, CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code < 200 && http_code >= 300) {
+        pthread_mutex_unlock(&_fd->mutex);
+        HR_LOGD("%s(%d): response code:%ld, maybe download error!.\n", __FUNCTION__, __LINE__, http_code);
+        return 0;
+    }
+    // verify redirection ...
+    long redirect_count = 0;
+    if (0 == curl_easy_getinfo(_fd->curl, CURLINFO_REDIRECT_COUNT, &redirect_count)) {
+        HR_LOGD("%s(%d): redirect times:%ld\n", __FUNCTION__, __LINE__, redirect_count);
+        if (redirect_count != 0) {
+            char *redirect_url = NULL;
+            curl_easy_getinfo(_fd->curl, CURLINFO_EFFECTIVE_URL, &redirect_url);
+            HR_LOGD("%s(%d): redirect times:%ld -> %s\n", __FUNCTION__, __LINE__, redirect_count, redirect_url);
+            if (redirect_url) {
+                free(_fd->url);
+                _fd->url = strdup(redirect_url);
+                HR_LOGD("%s(%d): redirect times:%ld -> %s\n", __FUNCTION__, __LINE__, redirect_count, _fd->url);
+
+                // reset clear redirection flag
+                curl_multi_remove_handle(_fd->multi, _fd->curl);
+                curl_easy_setopt(_fd->curl, CURLOPT_URL, _fd->url);
+                curl_multi_add_handle(_fd->multi, _fd->curl);
+            }
+        }
+    }
+
     size = MIN(size, _fd->cache.offset);
     memcpy(rbuf, _fd->cache.data, size);
     _fd->cache.offset -= size;
@@ -911,7 +951,7 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     _fd->offset += size;
     pthread_mutex_unlock(&_fd->mutex);
-    HR_LOGD("%s(%d): ....out .....fd:%p. offset:%ld, size:%ld.\n", __FUNCTION__, __LINE__, fd, offset, size);
+    HR_LOGD("%s(%d): ....out .....fd:%p. offset:%ld, size:%ld., cached offset:%ld\n", __FUNCTION__, __LINE__, fd, offset, size, _fd->cache.offset);
     return size;
 }
 // https://api.cloud.189.cn/newOpen/user/getUserInfo.action
@@ -1695,7 +1735,7 @@ int tcloud_drive_unlink(int64_t id, const char *name) {
         usleep(1000 * 100);
         _tcloud_drive_wait_task("DELETE", tmp, &status);
         if (status == 2) {  // conflict
-    HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
+            HR_LOGD("%s(%d): delete maybe failed ....\n", __FUNCTION__, __LINE__);
             return -status;
         }
         if (status == 4) {  // complete
