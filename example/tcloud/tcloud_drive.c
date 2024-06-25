@@ -866,8 +866,8 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
         char *url = NULL;
         char range[64] = {0};
         // do not end, so we may prefetch some data when sequence read ...
-        // snprintf(range, sizeof(range), "%zu-", offset);
-        snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
+        snprintf(range, sizeof(range), "%zu-", offset);
+        // snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
         // must remove/add again for new request
         curl_multi_remove_handle(_fd->multi, _fd->curl);
 
