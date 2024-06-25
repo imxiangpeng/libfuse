@@ -70,8 +70,8 @@ const char *_user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 // const char *secret = "49A06A5CA9FC9B9FA4EBCE2837B7741A";
 // const char *session_key = "da374873-7b39-4020-860b-4279c2db77d9";
 
-const char *secret = "C337269FA8883E42BD6E5B8AA951A98D";
-const char *session_key = "fef41a2d-875a-4a4d-aaca-73fe22c28223";
+const char *secret = "517C0DE33DF21014E7C5132B71015ECA";
+const char *session_key = "8bdca3e3-d08d-4b93-8587-950eabe62748";
 
 struct tcloud_drive {
     struct tcloud_request_pool *request_pool;  // api request pool
@@ -87,6 +87,7 @@ struct tcloud_drive_download_fd {
     CURLM *multi;
     CURL *curl;  // opened handle
     char *url;
+    char *redirect_url;
 
     // cycle_buffer_t *cycle;
     struct tcloud_buffer cache;
@@ -785,6 +786,10 @@ int tcloud_drive_release(struct tcloud_drive_fd *fd, int64_t *id) {
             free(_fd->url);
         }
 
+        if (_fd->redirect_url) {
+            free(_fd->redirect_url);
+        }
+
         tcloud_buffer_free(&_fd->cache);
         free(_fd);
         return 0;
@@ -858,13 +863,20 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
     }
 
     if (offset != _fd->offset) {
+        char *url = NULL;
         char range[64] = {0};
         // do not end, so we may prefetch some data when sequence read ...
-        snprintf(range, sizeof(range), "%zu-", offset);
-        // snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
+        // snprintf(range, sizeof(range), "%zu-", offset);
+        snprintf(range, sizeof(range), "%zu-%zu", offset, offset + size - 1);
         // must remove/add again for new request
         curl_multi_remove_handle(_fd->multi, _fd->curl);
-        curl_easy_setopt(_fd->curl, CURLOPT_URL, _fd->url);
+
+        if (_fd->redirect_url) {
+            url = _fd->redirect_url;
+        } else {
+            url = _fd->url;
+        }
+        curl_easy_setopt(_fd->curl, CURLOPT_URL, url);
         curl_easy_setopt(_fd->curl, CURLOPT_RANGE, range);
         curl_multi_add_handle(_fd->multi, _fd->curl);
 
@@ -916,28 +928,25 @@ size_t tcloud_drive_read(struct tcloud_drive_fd *fd, char *rbuf, size_t size, of
 
     long http_code = 0;
     curl_easy_getinfo(_fd->curl, CURLINFO_RESPONSE_CODE, &http_code);
-    if (http_code < 200 && http_code >= 300) {
+    HR_LOGD("%s(%d): response code:%ld!.\n", __FUNCTION__, __LINE__, http_code);
+    if (http_code < 200L || http_code >= 300L) {
         pthread_mutex_unlock(&_fd->mutex);
         HR_LOGD("%s(%d): response code:%ld, maybe download error!.\n", __FUNCTION__, __LINE__, http_code);
         return 0;
     }
     // verify redirection ...
-    long redirect_count = 0;
-    if (0 == curl_easy_getinfo(_fd->curl, CURLINFO_REDIRECT_COUNT, &redirect_count)) {
-        HR_LOGD("%s(%d): redirect times:%ld\n", __FUNCTION__, __LINE__, redirect_count);
-        if (redirect_count != 0) {
-            char *redirect_url = NULL;
-            curl_easy_getinfo(_fd->curl, CURLINFO_EFFECTIVE_URL, &redirect_url);
-            HR_LOGD("%s(%d): redirect times:%ld -> %s\n", __FUNCTION__, __LINE__, redirect_count, redirect_url);
-            if (redirect_url) {
-                free(_fd->url);
-                _fd->url = strdup(redirect_url);
-                HR_LOGD("%s(%d): redirect times:%ld -> %s\n", __FUNCTION__, __LINE__, redirect_count, _fd->url);
-
-                // reset clear redirection flag
-                curl_multi_remove_handle(_fd->multi, _fd->curl);
-                curl_easy_setopt(_fd->curl, CURLOPT_URL, _fd->url);
-                curl_multi_add_handle(_fd->multi, _fd->curl);
+    if (!_fd->redirect_url) {
+        long redirect_count = 0;
+        if (0 == curl_easy_getinfo(_fd->curl, CURLINFO_REDIRECT_COUNT, &redirect_count)) {
+            HR_LOGD("%s(%d): redirect times:%ld\n", __FUNCTION__, __LINE__, redirect_count);
+            if (redirect_count != 0) {
+                char *redirect_url = NULL;
+                curl_easy_getinfo(_fd->curl, CURLINFO_EFFECTIVE_URL, &redirect_url);
+                HR_LOGD("%s(%d): redirect times:%ld -> %s\n", __FUNCTION__, __LINE__, redirect_count, redirect_url);
+                if (redirect_url) {
+                    _fd->redirect_url = strdup(redirect_url);
+                    HR_LOGD("%s(%d): redirect times:%ld -> %s\n", __FUNCTION__, __LINE__, redirect_count, _fd->redirect_url);
+                }
             }
         }
     }
