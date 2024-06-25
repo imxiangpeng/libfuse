@@ -1279,7 +1279,7 @@ static void tcloudfs_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
         // }
     }
 
-#if 0  // delete when upload failed, trigger double free
+#if 1  // delete when upload failed, trigger double free
     if (id == TCLOUD_DRIVE_RESERVE_ID) {
         // upload failed, mxp , tests
         HR_LOGD("%s(%d): release %s, -> :%ld upload failed delete auto .....\n", __FUNCTION__, __LINE__, node->name, node->cloud_id);
