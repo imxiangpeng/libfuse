@@ -574,6 +574,10 @@ static void tcloudfs_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     // do_forget(req_fuse(req), ino, nlookup);
     struct tcloudfs_node *node = NULL, *p = NULL;
     node = (struct tcloudfs_node *)find_node(req, ino);
+    if (!node) {
+        fuse_reply_none(req);
+        return;
+    }
     HR_LOGD("%s(%d): forge %p, %s, refcount:%ld, nlookup:%ld\n", __FUNCTION__, __LINE__, node, node->name, node->refcount, nlookup);
 
     tcloudfs_do_forget(node, nlookup);
